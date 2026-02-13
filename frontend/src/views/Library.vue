@@ -320,7 +320,6 @@ async function copyMappedPath() {
 function openWithBrowser() {
   const localPath = mappedPathInfo.value.mappedPath
   
-  // 方法1: 尝试使用 file:// 协议（大部分浏览器会阻止）
   // 将 Windows 路径转换为 file 协议格式
   let fileUrl = localPath.replace(/\\/g, '/')
   
@@ -333,18 +332,71 @@ function openWithBrowser() {
   
   console.log('尝试打开路径:', fileUrl)
   
-  // 创建临时链接并点击
-  const link = document.createElement('a')
-  link.href = fileUrl
-  link.target = '_blank'
-  
-  // 尝试打开
+  // 方法1: window.open
+  let opened = false
   try {
-    link.click()
-    ElMessage.info('已尝试打开文件夹，如果被浏览器阻止，请使用复制路径方式')
+    const win = window.open(fileUrl, '_blank')
+    if (win) {
+      opened = true
+      console.log('window.open 成功')
+    }
   } catch (err) {
-    console.error('打开失败:', err)
-    ElMessage.warning('浏览器阻止了直接打开操作，请使用复制路径手动打开')
+    console.log('window.open 失败:', err)
+  }
+  
+  // 方法2: location.href
+  if (!opened) {
+    try {
+      // 使用 iframe 尝试加载
+      const iframe = document.createElement('iframe')
+      iframe.style.display = 'none'
+      iframe.src = fileUrl
+      document.body.appendChild(iframe)
+      
+      setTimeout(() => {
+        document.body.removeChild(iframe)
+      }, 1000)
+      
+      opened = true
+      console.log('iframe 方式已尝试')
+    } catch (err) {
+      console.log('iframe 方式失败:', err)
+    }
+  }
+  
+  // 方法3: 如果是 Edge/IE，尝试使用 ms-browser-extension 协议
+  if (!opened && window.navigator.msLaunchUri) {
+    try {
+      window.navigator.msLaunchUri(fileUrl)
+      opened = true
+    } catch (err) {
+      console.log('msLaunchUri 失败:', err)
+    }
+  }
+  
+  if (opened) {
+    ElMessage.success('已尝试打开文件夹')
+  } else {
+    ElMessage.warning('浏览器阻止了直接打开文件的操作（安全策略限制）')
+    
+    // 自动复制路径到剪贴板
+    copyMappedPath()
+    
+    // 显示详细提示
+    ElMessageBox.alert(
+      `由于浏览器安全限制，无法直接打开本地文件夹。<br><br>
+      <strong>已自动复制路径：</strong><br>
+      <code style="background:#f5f5f5;padding:5px;border-radius:3px;">${localPath}</code><br><br>
+      <strong>请手动打开：</strong><br>
+      1. 按 <kbd>Win + E</kbd> 打开文件资源管理器<br>
+      2. 在地址栏粘贴路径并回车`,
+      '需要手动打开',
+      {
+        confirmButtonText: '我知道了',
+        dangerouslyUseHTMLString: true,
+        type: 'info'
+      }
+    )
   }
 }
 
