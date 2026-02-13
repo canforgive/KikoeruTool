@@ -2475,8 +2475,13 @@ possible_paths = [
 ]
 
 frontend_build_path = None
+logger.info(f"检查静态文件路径，当前工作目录: {os.getcwd()}")
 for path in possible_paths:
-    if os.path.exists(path) and os.path.exists(os.path.join(path, "index.html")):
+    index_file = os.path.join(path, "index.html")
+    path_exists = os.path.exists(path)
+    index_exists = os.path.exists(index_file)
+    logger.info(f"检查路径: {path} - 目录存在: {path_exists}, index.html存在: {index_exists}")
+    if path_exists and index_exists:
         frontend_build_path = path
         logger.info(f"找到前端构建文件: {path}")
         break
