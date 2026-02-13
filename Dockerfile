@@ -30,7 +30,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/app/ ./app/
 
 # 从前端构建阶段复制静态文件
-COPY --from=frontend-builder /app/frontend/dist ./app/static
+COPY --from=frontend-builder /app/frontend/dist /app/static
 
 # 创建必要的目录
 RUN mkdir -p /app/data /app/config /input /temp /library /existing /processed
