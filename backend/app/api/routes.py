@@ -2486,15 +2486,15 @@ for path in possible_paths:
         logger.info(f"找到前端构建文件: {path}")
         break
 
-# 添加 catch-all 路由处理前端路由
+# 注册静态文件服务（放在子路径，避免覆盖 API）
 if frontend_build_path:
-    # 先注册 API 路由，再注册静态文件服务
-    # 这样 API 路由会优先匹配
+    # 提供静态资源文件（JS、CSS、图片等）
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_build_path, "assets")), name="assets")
     
     # 捕获所有非 API 路由，返回 index.html（SPA 支持）
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
-        # API 路由不应该被拦截，让 FastAPI 继续处理
+        # API 路由不应该被拦截
         if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi.json"):
             raise HTTPException(status_code=404, detail="Not found")
         
@@ -2504,7 +2504,3 @@ if frontend_build_path:
             return FileResponse(index_path)
         else:
             raise HTTPException(status_code=404, detail="Frontend not built")
-    
-    # 注册静态文件服务
-    # 注意：StaticFiles 放在后面，确保 API 路由优先
-    app.mount("/", StaticFiles(directory=frontend_build_path, html=True), name="static")
