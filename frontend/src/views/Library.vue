@@ -25,7 +25,7 @@
       </template>
       
       <el-table
-        :data="filteredFiles"
+        :data="paginatedFiles"
         v-loading="loading"
         style="width: 100%"
         empty-text="暂无文件"
@@ -253,6 +253,13 @@ const filteredFiles = computed(() => {
 
 // 总文件数
 const totalFiles = computed(() => filteredFiles.value.length)
+
+// 分页后的文件列表
+const paginatedFiles = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return filteredFiles.value.slice(start, end)
+})
 
 onMounted(() => {
   refreshLibrary()

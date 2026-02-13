@@ -18,9 +18,11 @@ export const useTaskStore = defineStore('tasks', {
   },
   
   actions: {
-    async fetchTasks(status = null) {
+    async fetchTasks(status = null, showLoading = true) {
       try {
-        this.loading = true
+        if (showLoading) {
+          this.loading = true
+        }
         const params = status ? { status } : {}
         const response = await axios.get(`${API_BASE}/tasks`, { params })
         this.tasks = response.data
@@ -28,7 +30,9 @@ export const useTaskStore = defineStore('tasks', {
         console.error('获取任务失败:', error)
         throw error
       } finally {
-        this.loading = false
+        if (showLoading) {
+          this.loading = false
+        }
       }
     },
     

@@ -359,21 +359,57 @@ onMounted(() => {
 
 async function refreshFolders() {
   loading.value = true
+  folders.value = [] // 清空列表
+  conflictCount.value = 0
+  
   try {
-    const response = await axios.post(`/api/existing-folders/scan?check_duplicates=${checkDuplicates.value}`)
-    folders.value = response.data.folders || []
-    conflictCount.value = response.data.conflict_count || 0
-    
-    if (folders.value.length > 0) {
-      let msg = `已加载 ${folders.value.length} 个文件夹`
-      if (conflictCount.value > 0) {
-        msg += `，发现 ${conflictCount.value} 个冲突`
+    const response = await fetch(`/api/existing-folders/scan?check_duplicates=${checkDuplicates.value}`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/x-ndjson'
       }
-      ElMessage.success(msg)
+    })
+    
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() // 保留不完整的最后一行
+      
+      for (const line of lines) {
+        if (line.trim()) {
+          try {
+            const data = JSON.parse(line)
+            
+            if (data.type === 'start') {
+              ElMessage.info(data.message)
+            } else if (data.type === 'folder') {
+              // 实时添加文件夹到列表
+              folders.value.push(data.folder)
+              if (data.folder.duplicate_info) {
+                conflictCount.value++
+              }
+            } else if (data.type === 'complete') {
+              let msg = data.message
+              ElMessage.success(msg)
+            } else if (data.type === 'error') {
+              ElMessage.error(data.error)
+            }
+          } catch (e) {
+            console.error('解析数据失败:', e, line)
+          }
+        }
+      }
     }
   } catch (error) {
     console.error('获取文件夹列表失败:', error)
-    ElMessage.error('获取失败: ' + (error.response?.data?.detail || error.message))
+    ElMessage.error('获取失败: ' + (error.message || '未知错误'))
   } finally {
     loading.value = false
   }

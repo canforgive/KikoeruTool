@@ -1,10 +1,12 @@
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 import asyncio
+import json
 import logging
 import os
 from pathlib import Path
@@ -1814,83 +1816,114 @@ async def get_existing_folders():
 
 @app.post("/api/existing-folders/scan")
 async def scan_existing_folders(check_duplicates: bool = True):
-    """扫描已存在文件夹目录，返回可处理的文件夹列表
+    """扫描已存在文件夹目录，使用流式传输实时返回结果
     
     Args:
         check_duplicates: 是否执行查重检查
     """
-    try:
-        config = get_config()
-        existing_folders_path = config.storage.existing_folders_path
-        
-        # 自动创建目录（如果不存在）
-        if not os.path.exists(existing_folders_path):
-            try:
-                os.makedirs(existing_folders_path, exist_ok=True)
-                logger.info(f"自动创建已存在文件夹目录: {existing_folders_path}")
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"无法创建目录: {str(e)}")
-        
-        folders = []
-        for item in os.listdir(existing_folders_path):
-            item_path = os.path.join(existing_folders_path, item)
+    async def generate_folders():
+        try:
+            config = get_config()
+            existing_folders_path = config.storage.existing_folders_path
             
-            # 跳过隐藏文件和非文件夹项目
-            if item.startswith('.') or not os.path.isdir(item_path):
-                continue
-            
-            # 提取RJ号
-            rj_match = re.search(r'[RVB]J(\d{6}|\d{8})(?!\d)', item, re.IGNORECASE)
-            rjcode = rj_match.group(0).upper() if rj_match else None
-            
-            folder_info = {
-                "name": item,
-                "path": item_path,
-                "rjcode": rjcode
-            }
-            
-            # 查重检查
-            if check_duplicates and rjcode:
+            # 自动创建目录（如果不存在）
+            if not os.path.exists(existing_folders_path):
                 try:
-                    from ..core.duplicate_service import get_duplicate_service
-                    duplicate_service = get_duplicate_service()
-                    check_result = await duplicate_service.check_duplicate_enhanced(
-                        rjcode, 
-                        check_linked_works=True,
-                        cue_languages=['CHI_HANS', 'CHI_HANT', 'ENG']
-                    )
-                    
-                    if check_result.is_duplicate:
-                        folder_info["duplicate_info"] = {
-                            "is_duplicate": True,
-                            "conflict_type": check_result.conflict_type,
-                            "direct_duplicate": check_result.direct_duplicate,
-                            "linked_works_found": check_result.linked_works_found,
-                            "related_rjcodes": check_result.related_rjcodes,
-                            "analysis_info": check_result.analysis_info
-                        }
-                        
-                        # 获取推荐的解决选项
-                        resolution_options = await duplicate_service.get_conflict_resolution_options(check_result)
-                        folder_info["duplicate_info"]["resolution_options"] = resolution_options
+                    os.makedirs(existing_folders_path, exist_ok=True)
+                    logger.info(f"自动创建已存在文件夹目录: {existing_folders_path}")
                 except Exception as e:
-                    logger.warning(f"查重检查失败 {rjcode}: {e}")
+                    yield json.dumps({"error": f"无法创建目录: {str(e)}"}) + "\n"
+                    return
             
-            folders.append(folder_info)
-        
-        # 统计有冲突的文件夹
-        conflict_count = sum(1 for f in folders if f.get("duplicate_info"))
-        
-        return {
-            "message": f"扫描完成，找到 {len(folders)} 个文件夹" + (f"，其中 {conflict_count} 个可能有冲突" if conflict_count > 0 else ""),
-            "count": len(folders),
-            "conflict_count": conflict_count,
-            "folders": folders
+            folders = []
+            conflict_count = 0
+            items = os.listdir(existing_folders_path)
+            total = len(items)
+            
+            # 发送开始扫描消息
+            yield json.dumps({
+                "type": "start",
+                "total": total,
+                "message": f"开始扫描，共 {total} 个项目"
+            }) + "\n"
+            
+            for index, item in enumerate(items):
+                item_path = os.path.join(existing_folders_path, item)
+                
+                # 跳过隐藏文件和非文件夹项目
+                if item.startswith('.') or not os.path.isdir(item_path):
+                    continue
+                
+                # 提取RJ号
+                rj_match = re.search(r'[RVB]J(\d{6}|\d{8})(?!\d)', item, re.IGNORECASE)
+                rjcode = rj_match.group(0).upper() if rj_match else None
+                
+                folder_info = {
+                    "name": item,
+                    "path": item_path,
+                    "rjcode": rjcode
+                }
+                
+                # 查重检查
+                if check_duplicates and rjcode:
+                    try:
+                        from ..core.duplicate_service import get_duplicate_service
+                        duplicate_service = get_duplicate_service()
+                        check_result = await duplicate_service.check_duplicate_enhanced(
+                            rjcode, 
+                            check_linked_works=True,
+                            cue_languages=['CHI_HANS', 'CHI_HANT', 'ENG']
+                        )
+                        
+                        if check_result.is_duplicate:
+                            folder_info["duplicate_info"] = {
+                                "is_duplicate": True,
+                                "conflict_type": check_result.conflict_type,
+                                "direct_duplicate": check_result.direct_duplicate,
+                                "linked_works_found": check_result.linked_works_found,
+                                "related_rjcodes": check_result.related_rjcodes,
+                                "analysis_info": check_result.analysis_info
+                            }
+                            
+                            # 获取推荐的解决选项
+                            resolution_options = await duplicate_service.get_conflict_resolution_options(check_result)
+                            folder_info["duplicate_info"]["resolution_options"] = resolution_options
+                            conflict_count += 1
+                    except Exception as e:
+                        logger.warning(f"查重检查失败 {rjcode}: {e}")
+                
+                folders.append(folder_info)
+                
+                # 发送单个文件夹数据
+                yield json.dumps({
+                    "type": "folder",
+                    "index": index,
+                    "total": total,
+                    "folder": folder_info,
+                    "progress": f"{index + 1}/{total}"
+                }) + "\n"
+            
+            # 发送完成消息
+            yield json.dumps({
+                "type": "complete",
+                "count": len(folders),
+                "conflict_count": conflict_count,
+                "folders": folders,
+                "message": f"扫描完成，找到 {len(folders)} 个文件夹" + (f"，其中 {conflict_count} 个可能有冲突" if conflict_count > 0 else "")
+            }) + "\n"
+            
+        except Exception as e:
+            logger.error(f"扫描已存在文件夹目录失败: {e}", exc_info=True)
+            yield json.dumps({"type": "error", "error": f"扫描失败: {str(e)}"}) + "\n"
+    
+    return StreamingResponse(
+        generate_folders(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
         }
-        
-    except Exception as e:
-        logger.error(f"扫描已存在文件夹目录失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"扫描失败: {str(e)}")
+    )
 
 
 @app.post("/api/existing-folders/check-duplicates")

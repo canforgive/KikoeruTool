@@ -10,10 +10,9 @@
       </el-radio-group>
     </div>
     
-    <el-card>
+    <el-card v-loading="initialLoading" element-loading-text="加载中...">
       <el-table 
-        :data="taskStore.tasks" 
-        v-loading="taskStore.loading"
+        :data="taskStore.tasks"
         style="width: 100%"
       >
         <el-table-column type="expand">
@@ -123,12 +122,24 @@ import { useTaskStore } from '../stores'
 
 const taskStore = useTaskStore()
 const currentStatus = ref('')
+const initialLoading = ref(true)
 
 let intervalId
 
 onMounted(async () => {
-  await taskStore.fetchTasks()
-  intervalId = setInterval(() => taskStore.fetchTasks(currentStatus.value), 3000)
+  try {
+    await taskStore.fetchTasks()
+  } finally {
+    initialLoading.value = false
+  }
+  // 轮询时不显示全局 loading
+  intervalId = setInterval(async () => {
+    try {
+      await taskStore.fetchTasks(currentStatus.value, false) // false = 不显示 loading
+    } catch (e) {
+      console.error('轮询任务失败:', e)
+    }
+  }, 3000)
 })
 
 onUnmounted(() => {
@@ -136,7 +147,12 @@ onUnmounted(() => {
 })
 
 async function handleStatusChange() {
-  await taskStore.fetchTasks(currentStatus.value)
+  initialLoading.value = true
+  try {
+    await taskStore.fetchTasks(currentStatus.value)
+  } finally {
+    initialLoading.value = false
+  }
 }
 
 function getFileName(path) {
