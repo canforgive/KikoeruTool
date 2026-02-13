@@ -27,6 +27,17 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# ========== 健康检查 API ==========
+@app.get("/api/health")
+async def health_check():
+    """健康检查端点"""
+    return {
+        "status": "healthy",
+        "service": "prekikoeru",
+        "version": "1.0.0",
+        "timestamp": datetime.now().isoformat()
+    }
+
 # CORS配置
 app.add_middleware(
     CORSMiddleware,
