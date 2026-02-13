@@ -157,11 +157,17 @@ def load_config(config_path: str = None) -> AppConfig:
     logger = logging.getLogger(__name__)
     
     if config_path is None:
-        # 根据当前文件位置确定配置路径
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        # 从 backend/app/config/settings.py 到项目根目录
-        project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
-        config_path = os.path.join(project_root, 'config', 'config.yaml')
+        # 优先从环境变量读取配置路径
+        env_config_path = os.environ.get('CONFIG_PATH')
+        if env_config_path:
+            config_path = env_config_path
+            logger.info(f"从环境变量 CONFIG_PATH 读取配置路径: {config_path}")
+        else:
+            # 根据当前文件位置确定配置路径
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            # 从 backend/app/config/settings.py 到项目根目录
+            project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
+            config_path = os.path.join(project_root, 'config', 'config.yaml')
     
     logger.info(f"加载配置文件: {config_path}")
     
@@ -322,11 +328,17 @@ def save_config(config_data: dict, config_path: str = None) -> AppConfig:
     global _config
     
     if config_path is None:
-        # 根据当前文件位置确定配置路径
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        # 从 backend/app/config/settings.py 到项目根目录
-        project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
-        config_path = os.path.join(project_root, 'config', 'config.yaml')
+        # 优先从环境变量读取配置路径
+        env_config_path = os.environ.get('CONFIG_PATH')
+        if env_config_path:
+            config_path = env_config_path
+            logger.info(f"从环境变量 CONFIG_PATH 读取配置路径: {config_path}")
+        else:
+            # 根据当前文件位置确定配置路径
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            # 从 backend/app/config/settings.py 到项目根目录
+            project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
+            config_path = os.path.join(project_root, 'config', 'config.yaml')
     
     # 转换为绝对路径
     config_path = os.path.abspath(config_path)
