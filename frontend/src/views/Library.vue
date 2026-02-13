@@ -225,6 +225,9 @@ const mappedPathInfo = ref({
   isMapped: false
 })
 
+// Tampermonkey 脚本检测
+const tampermonkeyLoaded = ref(false)
+
 // 过滤后的文件列表
 const filteredFiles = computed(() => {
   let result = files.value
@@ -245,6 +248,12 @@ const totalFiles = computed(() => filteredFiles.value.length)
 
 onMounted(() => {
   refreshLibrary()
+  
+  // 监听 Tampermonkey 脚本就绪事件
+  window.addEventListener('kikoeru-helper-ready', () => {
+    console.log('[Kikoeru] Tampermonkey 助手已加载')
+    tampermonkeyLoaded.value = true
+  })
 })
 
 async function refreshLibrary() {
@@ -320,6 +329,17 @@ async function copyMappedPath() {
 function openWithBrowser() {
   const localPath = mappedPathInfo.value.mappedPath
   
+  // 方法1: 尝试使用 Tampermonkey（如果已安装）
+  if (window.kikoeruHelperLoaded || tampermonkeyLoaded.value) {
+    console.log('[Kikoeru] 使用 Tampermonkey 打开:', localPath)
+    window.dispatchEvent(new CustomEvent('kikoeru-open-folder', {
+      detail: { path: localPath }
+    }))
+    ElMessage.success('已发送打开请求给 Tampermonkey')
+    return
+  }
+  
+  // 方法2: 普通浏览器方式（大概率失败）
   // 将 Windows 路径转换为 file 协议格式
   let fileUrl = localPath.replace(/\\/g, '/')
   
@@ -332,7 +352,7 @@ function openWithBrowser() {
   
   console.log('尝试打开路径:', fileUrl)
   
-  // 方法1: window.open
+  // 尝试 window.open
   let opened = false
   try {
     const win = window.open(fileUrl, '_blank')
@@ -344,59 +364,45 @@ function openWithBrowser() {
     console.log('window.open 失败:', err)
   }
   
-  // 方法2: location.href
+  // 尝试 iframe
   if (!opened) {
     try {
-      // 使用 iframe 尝试加载
       const iframe = document.createElement('iframe')
       iframe.style.display = 'none'
       iframe.src = fileUrl
       document.body.appendChild(iframe)
-      
-      setTimeout(() => {
-        document.body.removeChild(iframe)
-      }, 1000)
-      
+      setTimeout(() => document.body.removeChild(iframe), 1000)
       opened = true
-      console.log('iframe 方式已尝试')
     } catch (err) {
       console.log('iframe 方式失败:', err)
-    }
-  }
-  
-  // 方法3: 如果是 Edge/IE，尝试使用 ms-browser-extension 协议
-  if (!opened && window.navigator.msLaunchUri) {
-    try {
-      window.navigator.msLaunchUri(fileUrl)
-      opened = true
-    } catch (err) {
-      console.log('msLaunchUri 失败:', err)
     }
   }
   
   if (opened) {
     ElMessage.success('已尝试打开文件夹')
   } else {
-    ElMessage.warning('浏览器阻止了直接打开文件的操作（安全策略限制）')
+    // 所有方法都失败，提示安装 Tampermonkey
+    ElMessage.warning('浏览器阻止了直接打开操作')
     
-    // 自动复制路径到剪贴板
-    copyMappedPath()
-    
-    // 显示详细提示
-    ElMessageBox.alert(
-      `由于浏览器安全限制，无法直接打开本地文件夹。<br><br>
-      <strong>已自动复制路径：</strong><br>
-      <code style="background:#f5f5f5;padding:5px;border-radius:3px;">${localPath}</code><br><br>
-      <strong>请手动打开：</strong><br>
-      1. 按 <kbd>Win + E</kbd> 打开文件资源管理器<br>
-      2. 在地址栏粘贴路径并回车`,
-      '需要手动打开',
+    ElMessageBox.confirm(
+      `浏览器安全策略阻止了直接打开本地文件夹。<br><br>
+      <strong>推荐方案：</strong>安装 Tampermonkey 脚本<br>
+      安装后点击"尝试打开"即可直接打开文件夹<br><br>
+      <strong>临时方案：</strong>路径已复制，请手动打开`,
+      '无法直接打开',
       {
-        confirmButtonText: '我知道了',
-        dangerouslyUseHTMLString: true,
-        type: 'info'
+        confirmButtonText: '查看 Tampermonkey 脚本',
+        cancelButtonText: '手动打开',
+        type: 'warning',
+        dangerouslyUseHTMLString: true
       }
-    )
+    ).then(() => {
+      // 打开 GitHub 上的脚本页面
+      window.open('https://github.com/canforgive/KikoeruTool/blob/main/tampermonkey/kikoeru-folder-opener.js', '_blank')
+    }).catch(() => {
+      // 用户选择手动打开，复制路径
+      copyMappedPath()
+    })
   }
 }
 
