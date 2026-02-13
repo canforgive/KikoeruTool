@@ -258,7 +258,9 @@ const totalFiles = computed(() => filteredFiles.value.length)
 const paginatedFiles = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   const end = start + pageSize.value
-  return filteredFiles.value.slice(start, end)
+  const result = filteredFiles.value.slice(start, end)
+  console.log(`[Library Pagination] Page ${currentPage.value}, Size ${pageSize.value}, Start ${start}, End ${end}, Total ${filteredFiles.value.length}, Result ${result.length}`)
+  return result
 })
 
 onMounted(() => {
