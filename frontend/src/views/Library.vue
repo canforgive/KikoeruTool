@@ -257,11 +257,25 @@ const totalFiles = computed(() => filteredFiles.value.length)
 onMounted(() => {
   refreshLibrary()
   
-  // 监听 Tampermonkey 脚本就绪事件
-  window.addEventListener('kikoeru-helper-ready', () => {
-    console.log('[Kikoeru] Tampermonkey 助手已加载')
+  // 检查 Tampermonkey 脚本是否已加载（脚本可能已经在页面加载前完成）
+  if (window.kikoeruHelperLoaded) {
+    console.log('[Kikoeru] Tampermonkey 助手已预先加载')
+    tampermonkeyLoaded.value = true
+  }
+  
+  // 监听 Tampermonkey 脚本就绪事件（脚本可能在页面加载后才加载）
+  window.addEventListener('kikoeru-helper-ready', (event) => {
+    console.log('[Kikoeru] Tampermonkey 助手已加载', event.detail)
     tampermonkeyLoaded.value = true
   })
+  
+  // 5秒后再次检查（兜底机制）
+  setTimeout(() => {
+    if (!tampermonkeyLoaded.value && window.kikoeruHelperLoaded) {
+      console.log('[Kikoeru] 延迟检测到 Tampermonkey')
+      tampermonkeyLoaded.value = true
+    }
+  }, 5000)
 })
 
 async function refreshLibrary() {
@@ -339,44 +353,70 @@ async function openFolderDirect(row) {
     }
     
     // 检查 Tampermonkey 是否可用
-    if (window.kikoeruHelperLoaded || tampermonkeyLoaded.value) {
-      console.log('[Kikoeru] 直接打开:', targetPath)
+    const hasTampermonkey = window.kikoeruHelperLoaded || tampermonkeyLoaded.value
+    
+    // 无论是否检测到，都尝试发送事件（Tampermonkey 可能已加载但未触发事件）
+    console.log('[Kikoeru] 尝试直接打开:', targetPath, 'Tampermonkey状态:', hasTampermonkey)
+    
+    try {
       window.dispatchEvent(new CustomEvent('kikoeru-open-folder', {
         detail: { path: targetPath }
       }))
-      ElMessage.success('正在打开文件夹...')
-      return
-    }
-    
-    // Tampermonkey 未安装，显示提示
-    ElMessage.warning('Tampermonkey 脚本未安装，无法直接打开')
-    
-    // 复制路径并显示安装提示
-    try {
-      await navigator.clipboard.writeText(targetPath)
-      ElMessage.success('路径已复制到剪贴板')
-    } catch (err) {
-      console.error('复制失败:', err)
-    }
-    
-    ElMessageBox.confirm(
-      `直接打开需要安装 Tampermonkey 脚本。<br><br>
-      <strong>已复制路径：</strong><code>${targetPath}</code><br><br>
-      是否查看安装教程？`,
-      '需要 Tampermonkey',
-      {
-        confirmButtonText: '查看安装教程',
-        cancelButtonText: '手动打开',
-        type: 'warning',
-        dangerouslyUseHTMLString: true
+      
+      // 如果检测到了，显示成功消息
+      if (hasTampermonkey) {
+        ElMessage.success('正在打开文件夹...')
+      } else {
+        // 未检测到，等待2秒看是否有反应
+        ElMessage.info('正在尝试打开文件夹...')
+        
+        // 延迟检查是否成功
+        setTimeout(() => {
+          if (!window.kikoeruHelperLoaded && !tampermonkeyLoaded.value) {
+            // 仍然没有检测到，说明可能没有安装
+            showTampermonkeyDialog(targetPath)
+          }
+        }, 2000)
       }
-    ).then(() => {
-      window.open('https://github.com/canforgive/KikoeruTool/blob/main/tampermonkey/kikoeru-folder-opener.js', '_blank')
-    })
+      return
+    } catch (err) {
+      console.error('[Kikoeru] 发送打开事件失败:', err)
+    }
     
+    // 如果走到这里，说明发送事件失败
+    showTampermonkeyDialog(targetPath)
   } catch (error) {
     console.error('直接打开失败:', error)
     ElMessage.error(error.response?.data?.detail || '打开文件夹失败')
+  }
+}
+
+// 显示 Tampermonkey 安装提示对话框
+async function showTampermonkeyDialog(targetPath) {
+  ElMessage.warning('Tampermonkey 脚本未安装或加载失败，无法直接打开')
+  
+  // 复制路径并显示安装提示
+  try {
+    await navigator.clipboard.writeText(targetPath)
+    ElMessage.success('路径已复制到剪贴板')
+  } catch (err) {
+    console.error('复制失败:', err)
+  }
+  
+  ElMessageBox.confirm(
+    `直接打开需要安装 Tampermonkey 脚本。<br><br>
+    <strong>已复制路径：</strong><code>${targetPath}</code><br><br>
+    是否查看安装教程？`,
+    '需要 Tampermonkey',
+    {
+      confirmButtonText: '查看安装教程',
+      cancelButtonText: '手动打开',
+      type: 'warning',
+      dangerouslyUseHTMLString: true
+    }
+  ).then(() => {
+    window.open('https://github.com/canforgive/KikoeruTool/blob/main/tampermonkey/kikoeru-folder-opener.js', '_blank')
+  })
   }
 }
 
