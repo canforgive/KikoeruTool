@@ -68,6 +68,14 @@
             </el-button>
             <el-button 
               size="small" 
+              type="success"
+              @click="openFolderDirect(row)"
+              title="直接打开文件夹（需安装Tampermonkey脚本）"
+            >
+              直接打开
+            </el-button>
+            <el-button 
+              size="small" 
               type="warning"
               @click="renameItem(row)"
               :loading="renamingId === row.id"
@@ -310,6 +318,64 @@ async function openFolder(row) {
     ElMessage.success('已打开文件夹')
   } catch (error) {
     console.error('打开文件夹失败:', error)
+    ElMessage.error(error.response?.data?.detail || '打开文件夹失败')
+  }
+}
+
+// 直接打开文件夹（跳过弹窗）
+async function openFolderDirect(row) {
+  try {
+    // 先获取映射路径
+    const response = await axios.post('/api/library/open-folder', { path: row.path })
+    const data = response.data
+    
+    let targetPath
+    if (data.mode === 'mapped') {
+      targetPath = data.mapped_path
+    } else {
+      // 如果是直接模式，说明后端已打开
+      ElMessage.success('已打开文件夹')
+      return
+    }
+    
+    // 检查 Tampermonkey 是否可用
+    if (window.kikoeruHelperLoaded || tampermonkeyLoaded.value) {
+      console.log('[Kikoeru] 直接打开:', targetPath)
+      window.dispatchEvent(new CustomEvent('kikoeru-open-folder', {
+        detail: { path: targetPath }
+      }))
+      ElMessage.success('正在打开文件夹...')
+      return
+    }
+    
+    // Tampermonkey 未安装，显示提示
+    ElMessage.warning('Tampermonkey 脚本未安装，无法直接打开')
+    
+    // 复制路径并显示安装提示
+    try {
+      await navigator.clipboard.writeText(targetPath)
+      ElMessage.success('路径已复制到剪贴板')
+    } catch (err) {
+      console.error('复制失败:', err)
+    }
+    
+    ElMessageBox.confirm(
+      `直接打开需要安装 Tampermonkey 脚本。<br><br>
+      <strong>已复制路径：</strong><code>${targetPath}</code><br><br>
+      是否查看安装教程？`,
+      '需要 Tampermonkey',
+      {
+        confirmButtonText: '查看安装教程',
+        cancelButtonText: '手动打开',
+        type: 'warning',
+        dangerouslyUseHTMLString: true
+      }
+    ).then(() => {
+      window.open('https://github.com/canforgive/KikoeruTool/blob/main/tampermonkey/kikoeru-folder-opener.js', '_blank')
+    })
+    
+  } catch (error) {
+    console.error('直接打开失败:', error)
     ElMessage.error(error.response?.data?.detail || '打开文件夹失败')
   }
 }

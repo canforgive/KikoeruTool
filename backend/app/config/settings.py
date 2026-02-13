@@ -327,6 +327,9 @@ def save_config(config_data: dict, config_path: str = None) -> AppConfig:
     """保存配置到文件"""
     global _config
     
+    # 先初始化 logger
+    logger = logging.getLogger(__name__)
+    
     if config_path is None:
         # 优先从环境变量读取配置路径
         env_config_path = os.environ.get('CONFIG_PATH')
@@ -342,7 +345,6 @@ def save_config(config_data: dict, config_path: str = None) -> AppConfig:
     
     # 转换为绝对路径
     config_path = os.path.abspath(config_path)
-    logger = logging.getLogger(__name__)
     logger.info(f"保存配置到: {config_path}")
     
     # 确保目录存在
