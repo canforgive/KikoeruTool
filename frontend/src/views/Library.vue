@@ -155,6 +155,15 @@
             >
               复制路径
             </el-button>
+            <el-button 
+              type="success" 
+              size="small" 
+              @click="openWithBrowser"
+              style="margin-left: 5px;"
+              title="尝试用浏览器打开（可能被安全设置阻止）"
+            >
+              尝试打开
+            </el-button>
           </div>
         </el-descriptions-item>
         <el-descriptions-item label="映射状态">
@@ -304,6 +313,38 @@ async function copyMappedPath() {
   } catch (err) {
     console.error('复制失败:', err)
     ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+// 尝试用浏览器打开文件夹
+function openWithBrowser() {
+  const localPath = mappedPathInfo.value.mappedPath
+  
+  // 方法1: 尝试使用 file:// 协议（大部分浏览器会阻止）
+  // 将 Windows 路径转换为 file 协议格式
+  let fileUrl = localPath.replace(/\\/g, '/')
+  
+  // 如果是 Windows 驱动器路径（如 V:\...），添加 file:///
+  if (/^[a-zA-Z]:/.test(fileUrl)) {
+    fileUrl = 'file:///' + fileUrl
+  } else {
+    fileUrl = 'file://' + fileUrl
+  }
+  
+  console.log('尝试打开路径:', fileUrl)
+  
+  // 创建临时链接并点击
+  const link = document.createElement('a')
+  link.href = fileUrl
+  link.target = '_blank'
+  
+  // 尝试打开
+  try {
+    link.click()
+    ElMessage.info('已尝试打开文件夹，如果被浏览器阻止，请使用复制路径方式')
+  } catch (err) {
+    console.error('打开失败:', err)
+    ElMessage.warning('浏览器阻止了直接打开操作，请使用复制路径手动打开')
   }
 }
 
