@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  prekikoeru:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: prekikoeru:latest
+    container_name: prekikoeru
+    ports:
+      - "8000:8000"
+    volumes:
+      # 配置目录 - 保存配置文件
+      - ./config:/app/config
+      # 数据目录 - 数据库、日志等
+      - ./data:/app/data
+      # 输入目录 - 待处理的压缩包
+      - /path/to/input:/input
+      # 临时目录 - 解压过程中的临时文件
+      - /path/to/temp:/temp
+      # 作品库目录 - 最终整理好的作品
+      - /path/to/library:/library
+      # 已有文件夹目录 - 非软件解压的已有作品
+      - /path/to/existing:/existing
+      # 已处理压缩包目录 - 保存处理过的压缩包
+      - /path/to/processed:/processed
+    environment:
+      - CONFIG_PATH=/app/config/config.yaml
+      - DATA_PATH=/app/data
+      - TZ=Asia/Shanghai
+    # 使用 root 权限运行（文件操作需要）
+    user: "0:0"
+    privileged: true
+    # 性能优化
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    restart: unless-stopped
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

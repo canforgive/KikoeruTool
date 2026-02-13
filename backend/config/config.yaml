@@ -1,0 +1,47 @@
+classification:
+- enabled: true
+  fallback: null
+  max_tags: null
+  path_template: '{rjcode} {work_name}'
+  type: tags
+filter:
+  enabled: true
+  filter_dir: true
+  rules: []
+metadata:
+  cache_enabled: true
+  connect_timeout: 10
+  fetch_cover: true
+  http_proxy: null
+  locale: zh_cn
+  make_folder_icon: true
+  read_timeout: 10
+  remove_jpg_file: true
+  sleep_interval: 3
+processing:
+  file_stable_checks: 3
+  file_stable_interval: 2
+  max_wait_time: 3600
+  max_workers: 4
+  retry_count: 3
+rename:
+  cv_list_left: '(CV '
+  cv_list_right: )
+  date_format: '%y%m%d'
+  delimiter: ' '
+  exclude_square_brackets: false
+  illegal_char_to_full_width: false
+  tags_max_number: 5
+  tags_ordered_list: []
+  template: '{rjcode} {work_name}'
+storage:
+  input_path: E:\\音声测试\\入库
+  library_path: E:\\音声测试\\成品库
+  processed_archives_path: E:\\音声测试\\解压完成
+  temp_path: E:\\音声测试\\解压缓存
+watcher:
+  auto_classify: true
+  auto_start: true
+  delete_after_process: false
+  enabled: true
+  scan_interval: 30

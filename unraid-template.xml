@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Container version="2">
+  <Name>prekikoeru</Name>
+  <Repository>prekikoeru/prekikoeru:latest</Repository>
+  <Registry>https://hub.docker.com/r/prekikoeru/prekikoeru</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>true</Privileged>
+  <Support>https://github.com/anomalyco/prekikoeru/issues</Support>
+  <Project>https://github.com/anomalyco/prekikoeru</Project>
+  <Overview>Prekikoeru - DLsite 作品自动整理工具。支持自动解压、元数据获取、智能重命名、分类整理，以及智能查重功能。</Overview>
+  <Category>MediaApp:Other</Category>
+  <WebUI>http://[IP]:[PORT:8000]</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/anomalyco/prekikoeru/main/icon.png</Icon>
+  <ExtraParams>--ulimit nofile=65536:65536</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web UI 端口" Target="8000" Default="8000" Mode="tcp" Description="Web 界面访问端口" Type="Port" Display="always" Required="true" Mask="false"/>
+  <Config Name="配置目录" Target="/app/config" Default="/mnt/user/appdata/prekikoeru/config" Mode="rw" Description="配置文件存储目录" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="数据目录" Target="/app/data" Default="/mnt/user/appdata/prekikoeru/data" Mode="rw" Description="数据库和日志存储目录" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="输入目录" Target="/input" Default="/mnt/user/downloads/dl/done" Mode="rw" Description="待处理的压缩包输入目录" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="临时目录" Target="/temp" Default="/mnt/user/appdata/prekikoeru/temp" Mode="rw" Description="解压临时文件目录（建议 SSD）" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="作品库目录" Target="/library" Default="/mnt/user/media/dlsite" Mode="rw" Description="整理好的作品库存储目录" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="已有文件夹目录" Target="/existing" Default="/mnt/user/appdata/prekikoeru/existing" Mode="rw" Description="已有作品文件夹目录（非软件解压的）" Type="Path" Display="always" Required="false" Mask="false"/>
+  <Config Name="已处理压缩包目录" Target="/processed" Default="/mnt/user/appdata/prekikoeru/processed" Mode="rw" Description="已处理压缩包备份目录" Type="Path" Display="always" Required="false" Mask="false"/>
+  <Config Name="时区" Target="TZ" Default="Asia/Shanghai" Mode="" Description="容器时区设置" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="用户 ID" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="用户组 ID" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <TailscaleStateDir/>
+</Container>
