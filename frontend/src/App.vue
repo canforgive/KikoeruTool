@@ -70,6 +70,9 @@
             {{ watcherStatus.is_running ? '停止' : '启动' }}
           </el-button>
         </div>
+        <div class="version-info">
+          <span class="version-text">v{{ appVersion }}</span>
+        </div>
       </div>
     </el-aside>
     
@@ -84,6 +87,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { Box, HomeFilled, List, WarningFilled, Setting, Document, Lock, Folder } from '@element-plus/icons-vue'
 import { useWatcherStore } from './stores'
+import { version as appVersion } from '../package.json'
 
 const watcherStore = useWatcherStore()
 const conflictCount = ref(0)
@@ -160,6 +164,18 @@ async function toggleWatcher() {
 
 .conflict-badge {
   margin-left: auto;
+}
+
+.version-info {
+  margin-top: 8px;
+  text-align: center;
+  padding-top: 8px;
+  border-top: 1px solid #334155;
+}
+
+.version-text {
+  font-size: 12px;
+  color: #64748b;
 }
 
 .main-content {
