@@ -146,6 +146,7 @@
         
         <el-table-column label="查重状态" width="150">
           <template #default="{ row }">
+            <!-- 有冲突 -->
             <el-tag 
               v-if="row.duplicate_info && row.duplicate_info.is_duplicate" 
               type="danger" 
@@ -156,9 +157,22 @@
               <el-icon><Warning /></el-icon>
               {{ getConflictTypeLabel(row.duplicate_info.conflict_type) }}
             </el-tag>
-            <el-tag v-else-if="row.duplicate_info === null" type="info" size="small">
+            <!-- 等待检查（初始状态） -->
+            <el-tag v-else-if="!row.status || row.status === 'pending'" type="info" size="small">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              等待检查...
+            </el-tag>
+            <!-- 检查中 -->
+            <el-tag v-else-if="row.status === 'checking'" type="warning" size="small">
+              <el-icon class="is-loading"><Loading /></el-icon>
               检查中...
             </el-tag>
+            <!-- 从缓存加载 -->
+            <el-tag v-else-if="row.status === 'cached'" type="success" size="small">
+              <el-icon><Check /></el-icon>
+              已缓存
+            </el-tag>
+            <!-- 无冲突 -->
             <el-tag v-else type="success" size="small">
               <el-icon><Check /></el-icon>
               无冲突
@@ -334,7 +348,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Refresh, RefreshRight, Search, Folder, VideoPlay, Warning, Check, InfoFilled } from '@element-plus/icons-vue'
+import { Refresh, RefreshRight, Search, Folder, VideoPlay, Warning, Check, InfoFilled, Loading } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
@@ -496,6 +510,7 @@ async function refreshFoldersWithOptions(forceRefresh = false) {
     let buffer = ''
     let cachedCount = 0
     let apiCount = 0
+    let checkingStarted = false
     
     while (true) {
       const { done, value } = await reader.read()
@@ -513,16 +528,31 @@ async function refreshFoldersWithOptions(forceRefresh = false) {
             if (data.type === 'start') {
               ElMessage.info(data.message)
             } else if (data.type === 'folder') {
-              // 实时添加文件夹到列表（使用展开运算符确保Vue检测到变化）
+              // 第一阶段：快速列出所有文件夹（立即可见，可操作）
               folders.value = [...folders.value, data.folder]
-              if (data.folder.duplicate_info) {
-                conflictCount.value++
-              }
-              // 统计缓存/API
-              if (data.from_cache) {
-                cachedCount++
-              } else {
-                apiCount++
+            } else if (data.type === 'checking_start') {
+              // 第二阶段开始：后台查重
+              checkingStarted = true
+              ElMessage.info(data.message)
+            } else if (data.type === 'folder_update') {
+              // 第二阶段：更新查重结果
+              const index = folders.value.findIndex(f => f.path === data.folder.path)
+              if (index !== -1) {
+                // 更新对应文件夹的信息
+                folders.value[index] = { ...folders.value[index], ...data.folder }
+                // 触发更新
+                folders.value = [...folders.value]
+                
+                if (data.folder.duplicate_info) {
+                  conflictCount.value++
+                }
+                
+                // 统计
+                if (data.from_cache) {
+                  cachedCount++
+                } else {
+                  apiCount++
+                }
               }
             } else if (data.type === 'complete') {
               let msg = data.message
