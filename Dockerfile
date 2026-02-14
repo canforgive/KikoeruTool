@@ -6,11 +6,11 @@ WORKDIR /app/frontend
 
 # 复制前端依赖
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm ci --verbose || (echo "npm install failed" && exit 1)
 
 # 复制前端源码并构建
 COPY frontend/ ./
-RUN npm run build
+RUN npm run build 2>&1 || (echo "Build failed with exit code $?" && cat /app/frontend/npm-debug.log 2>/dev/null || true && exit 1)
 
 # 阶段2：后端运行环境
 FROM python:3.11-slim
