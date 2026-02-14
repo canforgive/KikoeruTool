@@ -426,7 +426,6 @@ async function showTampermonkeyDialog(targetPath) {
   ).then(() => {
     window.open('https://github.com/canforgive/KikoeruTool/blob/main/tampermonkey/kikoeru-folder-opener.js', '_blank')
   })
-  }
 }
 
 // 复制映射路径到剪贴板
