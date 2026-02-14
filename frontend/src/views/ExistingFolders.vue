@@ -167,21 +167,20 @@
               <el-icon class="is-loading"><Loading /></el-icon>
               检查中...
             </el-tag>
-            <!-- 从缓存加载 -->
-            <el-tag v-else-if="row.status === 'cached'" type="success" size="small">
-              <el-icon><Check /></el-icon>
-              已缓存
-            </el-tag>
-            <!-- 无冲突 -->
+            <!-- 无冲突（包括从缓存加载的无冲突数据） -->
             <el-tag v-else type="success" size="small">
               <el-icon><Check /></el-icon>
               无冲突
+              <el-tooltip v-if="row.status === 'cached'" content="来自缓存" placement="top">
+                <el-icon style="margin-left: 2px; font-size: 10px;"><Clock /></el-icon>
+              </el-tooltip>
             </el-tag>
           </template>
         </el-table-column>
         
-        <el-table-column label="操作" width="120">
+        <el-table-column label="操作" width="180">
           <template #default="{ row }">
+            <!-- 有冲突时显示查看冲突按钮 -->
             <el-button 
               v-if="row.duplicate_info && row.duplicate_info.is_duplicate"
               type="warning" 
@@ -190,7 +189,27 @@
             >
               查看冲突
             </el-button>
-            <span v-else>-</span>
+            <!-- 无冲突时显示操作按钮组 -->
+            <el-button-group v-else>
+              <el-tooltip content="删除文件夹" placement="top">
+                <el-button 
+                  type="danger" 
+                  size="small"
+                  @click="handleDeleteFolder(row)"
+                >
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </el-tooltip>
+              <el-tooltip content="强制刷新查重" placement="top">
+                <el-button 
+                  type="primary" 
+                  size="small"
+                  @click="handleRefreshFolder(row)"
+                >
+                  <el-icon><RefreshRight /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </el-button-group>
           </template>
         </el-table-column>
       </el-table>
@@ -348,7 +367,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Refresh, RefreshRight, Search, Folder, VideoPlay, Warning, Check, InfoFilled, Loading } from '@element-plus/icons-vue'
+import { Refresh, RefreshRight, Search, Folder, VideoPlay, Warning, Check, InfoFilled, Loading, Clock, Delete } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
@@ -797,6 +816,92 @@ async function handleProcessWithResolution() {
     if (error !== 'cancel') {
       console.error('处理失败:', error)
       ElMessage.error('处理失败: ' + (error.response?.data?.detail || error.message))
+    }
+  }
+}
+
+// 删除无冲突的文件夹
+async function handleDeleteFolder(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除文件夹 "${row.name}" 吗？\n此操作不可恢复！`,
+      '确认删除',
+      {
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    
+    // 调用后端删除接口
+    await axios.post('/api/existing-folders/delete', {
+      path: row.path
+    })
+    
+    ElMessage.success('文件夹已删除')
+    
+    // 刷新列表
+    await refreshFolders()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败: ' + (error.response?.data?.detail || error.message))
+    }
+  }
+}
+
+// 强制刷新单个文件夹的查重状态
+async function handleRefreshFolder(row) {
+  try {
+    // 找到文件夹在列表中的索引
+    const index = folders.value.findIndex(f => f.path === row.path)
+    if (index === -1) return
+    
+    // 设置状态为检查中
+    folders.value[index].status = 'checking'
+    
+    // 调用查重接口
+    const response = await axios.post('/api/existing-folders/check-duplicates', {
+      folders: [row.path],
+      check_linked_works: true
+    })
+    
+    // 更新查重信息
+    const result = response.data.results[0]
+    if (result) {
+      if (result.error) {
+        folders.value[index].duplicate_info = { error: result.error }
+      } else {
+        folders.value[index].duplicate_info = {
+          is_duplicate: result.is_duplicate,
+          conflict_type: result.conflict_type,
+          direct_duplicate: result.direct_duplicate,
+          linked_works_found: result.linked_works_found,
+          related_rjcodes: result.related_rjcodes,
+          analysis_info: result.analysis_info,
+          resolution_options: result.resolution_options
+        }
+      }
+      folders.value[index].status = 'checked'
+      
+      // 更新冲突计数
+      conflictCount.value = folders.value.filter(f => 
+        f.duplicate_info && f.duplicate_info.is_duplicate
+      ).length
+      
+      if (result.is_duplicate) {
+        ElMessage.warning('发现冲突')
+      } else {
+        ElMessage.success('查重完成，无冲突')
+      }
+    }
+  } catch (error) {
+    console.error('刷新失败:', error)
+    ElMessage.error('刷新失败: ' + (error.response?.data?.detail || error.message))
+    // 恢复原状态
+    const index = folders.value.findIndex(f => f.path === row.path)
+    if (index !== -1) {
+      folders.value[index].status = 'cached'
     }
   }
 }
