@@ -417,8 +417,8 @@ async function refreshFolders() {
             if (data.type === 'start') {
               ElMessage.info(data.message)
             } else if (data.type === 'folder') {
-              // 实时添加文件夹到列表
-              folders.value.push(data.folder)
+              // 实时添加文件夹到列表（使用展开运算符确保Vue检测到变化）
+              folders.value = [...folders.value, data.folder]
               if (data.folder.duplicate_info) {
                 conflictCount.value++
               }
@@ -513,8 +513,8 @@ async function refreshFoldersWithOptions(forceRefresh = false) {
             if (data.type === 'start') {
               ElMessage.info(data.message)
             } else if (data.type === 'folder') {
-              // 实时添加文件夹到列表
-              folders.value.push(data.folder)
+              // 实时添加文件夹到列表（使用展开运算符确保Vue检测到变化）
+              folders.value = [...folders.value, data.folder]
               if (data.folder.duplicate_info) {
                 conflictCount.value++
               }
