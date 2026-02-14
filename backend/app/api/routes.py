@@ -1878,11 +1878,12 @@ async def get_existing_folders():
         raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
 
 @app.post("/api/existing-folders/scan")
-async def scan_existing_folders(check_duplicates: bool = True):
-    """扫描已存在文件夹目录，使用流式传输实时返回结果
+async def scan_existing_folders(check_duplicates: bool = True, force_refresh: bool = False):
+    """扫描已存在文件夹目录，使用缓存机制避免重复API查询
     
     Args:
         check_duplicates: 是否执行查重检查
+        force_refresh: 是否强制刷新缓存
     """
     async def generate_folders():
         try:
@@ -1898,82 +1899,159 @@ async def scan_existing_folders(check_duplicates: bool = True):
                     yield json.dumps({"error": f"无法创建目录: {str(e)}"}) + "\n"
                     return
             
-            folders = []
-            conflict_count = 0
-            items = os.listdir(existing_folders_path)
-            total = len(items)
+            # 获取数据库会话
+            from ..models.database import get_db
+            db = next(get_db())
             
-            # 发送开始扫描消息
-            yield json.dumps({
-                "type": "start",
-                "total": total,
-                "message": f"开始扫描，共 {total} 个项目"
-            }) + "\n"
-            
-            for index, item in enumerate(items):
-                item_path = os.path.join(existing_folders_path, item)
+            try:
+                folders = []
+                conflict_count = 0
+                items = os.listdir(existing_folders_path)
+                total = len(items)
                 
-                # 跳过隐藏文件和非文件夹项目
-                if item.startswith('.') or not os.path.isdir(item_path):
-                    continue
-                
-                # 提取RJ号
-                rj_match = re.search(r'[RVB]J(\d{6}|\d{8})(?!\d)', item, re.IGNORECASE)
-                rjcode = rj_match.group(0).upper() if rj_match else None
-                
-                folder_info = {
-                    "name": item,
-                    "path": item_path,
-                    "rjcode": rjcode
-                }
-                
-                # 查重检查
-                if check_duplicates and rjcode:
-                    try:
-                        from ..core.duplicate_service import get_duplicate_service
-                        duplicate_service = get_duplicate_service()
-                        check_result = await duplicate_service.check_duplicate_enhanced(
-                            rjcode, 
-                            check_linked_works=True,
-                            cue_languages=['CHI_HANS', 'CHI_HANT', 'ENG']
-                        )
-                        
-                        if check_result.is_duplicate:
-                            folder_info["duplicate_info"] = {
-                                "is_duplicate": True,
-                                "conflict_type": check_result.conflict_type,
-                                "direct_duplicate": check_result.direct_duplicate,
-                                "linked_works_found": check_result.linked_works_found,
-                                "related_rjcodes": check_result.related_rjcodes,
-                                "analysis_info": check_result.analysis_info
-                            }
-                            
-                            # 获取推荐的解决选项
-                            resolution_options = await duplicate_service.get_conflict_resolution_options(check_result)
-                            folder_info["duplicate_info"]["resolution_options"] = resolution_options
-                            conflict_count += 1
-                    except Exception as e:
-                        logger.warning(f"查重检查失败 {rjcode}: {e}")
-                
-                folders.append(folder_info)
-                
-                # 发送单个文件夹数据
+                # 发送开始扫描消息
                 yield json.dumps({
-                    "type": "folder",
-                    "index": index,
+                    "type": "start",
                     "total": total,
-                    "folder": folder_info,
-                    "progress": f"{index + 1}/{total}"
+                    "message": f"开始扫描，共 {total} 个项目"
                 }) + "\n"
-            
-            # 发送完成消息
-            yield json.dumps({
-                "type": "complete",
-                "count": len(folders),
-                "conflict_count": conflict_count,
-                "folders": folders,
-                "message": f"扫描完成，找到 {len(folders)} 个文件夹" + (f"，其中 {conflict_count} 个可能有冲突" if conflict_count > 0 else "")
-            }) + "\n"
+                
+                for index, item in enumerate(items):
+                    item_path = os.path.join(existing_folders_path, item)
+                    
+                    # 跳过隐藏文件和非文件夹项目
+                    if item.startswith('.') or not os.path.isdir(item_path):
+                        continue
+                    
+                    # 提取RJ号
+                    rj_match = re.search(r'[RVB]J(\d{6}|\d{8})(?!\d)', item, re.IGNORECASE)
+                    rjcode = rj_match.group(0).upper() if rj_match else None
+                    
+                    folder_info = {
+                        "name": item,
+                        "path": item_path,
+                        "rjcode": rjcode
+                    }
+                    
+                    # 检查缓存
+                    cache = None
+                    if not force_refresh:
+                        try:
+                            from ..models.database import ExistingFolderCache
+                            cache = db.query(ExistingFolderCache).filter(
+                                ExistingFolderCache.folder_path == item_path
+                            ).first()
+                        except Exception as e:
+                            logger.warning(f"查询缓存失败: {e}")
+                    
+                    # 如果有缓存且不需要刷新，直接使用缓存
+                    if cache and not force_refresh and not cache.needs_refresh:
+                        folder_info["duplicate_info"] = cache.duplicate_info
+                        folder_info["file_count"] = cache.file_count
+                        folder_info["folder_size"] = cache.folder_size
+                        if cache.duplicate_info:
+                            conflict_count += 1
+                        logger.debug(f"使用缓存: {item_path}")
+                    elif check_duplicates and rjcode:
+                        # 没有缓存或需要刷新，执行API查询
+                        try:
+                            from ..core.duplicate_service import get_duplicate_service
+                            duplicate_service = get_duplicate_service()
+                            
+                            # 添加延时避免429
+                            if index > 0 and index % 10 == 0:
+                                await asyncio.sleep(1)
+                            
+                            check_result = await duplicate_service.check_duplicate_enhanced(
+                                rjcode, 
+                                check_linked_works=True,
+                                cue_languages=['CHI_HANS', 'CHI_HANT', 'ENG']
+                            )
+                            
+                            if check_result.is_duplicate:
+                                folder_info["duplicate_info"] = {
+                                    "is_duplicate": True,
+                                    "conflict_type": check_result.conflict_type,
+                                    "direct_duplicate": check_result.direct_duplicate,
+                                    "linked_works_found": check_result.linked_works_found,
+                                    "related_rjcodes": check_result.related_rjcodes,
+                                    "analysis_info": check_result.analysis_info
+                                }
+                                
+                                # 获取推荐的解决选项
+                                resolution_options = await duplicate_service.get_conflict_resolution_options(check_result)
+                                folder_info["duplicate_info"]["resolution_options"] = resolution_options
+                                conflict_count += 1
+                            
+                            # 计算文件夹大小
+                            folder_size = 0
+                            file_count = 0
+                            try:
+                                for root, dirs, files in os.walk(item_path):
+                                    file_count += len(files)
+                                    for file in files:
+                                        file_path = os.path.join(root, file)
+                                        if os.path.isfile(file_path):
+                                            folder_size += os.path.getsize(file_path)
+                            except:
+                                pass
+                            
+                            folder_info["file_count"] = file_count
+                            folder_info["folder_size"] = folder_size
+                            
+                            # 保存到缓存
+                            try:
+                                from ..models.database import ExistingFolderCache
+                                if cache:
+                                    # 更新缓存
+                                    cache.duplicate_info = folder_info.get("duplicate_info")
+                                    cache.file_count = file_count
+                                    cache.folder_size = folder_size
+                                    cache.updated_at = datetime.utcnow()
+                                    cache.needs_refresh = False
+                                else:
+                                    # 创建新缓存
+                                    cache = ExistingFolderCache(
+                                        folder_path=item_path,
+                                        folder_name=item,
+                                        rjcode=rjcode,
+                                        duplicate_info=folder_info.get("duplicate_info"),
+                                        file_count=file_count,
+                                        folder_size=folder_size
+                                    )
+                                    db.add(cache)
+                                db.commit()
+                                logger.debug(f"保存缓存: {item_path}")
+                            except Exception as e:
+                                logger.warning(f"保存缓存失败: {e}")
+                                db.rollback()
+                                
+                        except Exception as e:
+                            logger.warning(f"查重检查失败 {rjcode}: {e}")
+                    
+                    folders.append(folder_info)
+                    
+                    # 发送单个文件夹数据
+                    yield json.dumps({
+                        "type": "folder",
+                        "index": index,
+                        "total": total,
+                        "folder": folder_info,
+                        "progress": f"{index + 1}/{total}",
+                        "from_cache": cache is not None and not force_refresh
+                    }) + "\n"
+                
+                # 发送完成消息
+                yield json.dumps({
+                    "type": "complete",
+                    "count": len(folders),
+                    "conflict_count": conflict_count,
+                    "folders": folders,
+                    "message": f"扫描完成，找到 {len(folders)} 个文件夹" + (f"，其中 {conflict_count} 个可能有冲突" if conflict_count > 0 else "")
+                }) + "\n"
+                
+            finally:
+                db.close()
             
         except Exception as e:
             logger.error(f"扫描已存在文件夹目录失败: {e}", exc_info=True)
@@ -1987,6 +2065,44 @@ async def scan_existing_folders(check_duplicates: bool = True):
             "X-Accel-Buffering": "no"
         }
     )
+
+@app.post("/api/existing-folders/refresh-cache")
+async def refresh_existing_folders_cache():
+    """刷新所有已有文件夹的缓存信息"""
+    try:
+        from ..models.database import get_db, ExistingFolderCache
+        
+        db = next(get_db())
+        try:
+            # 标记所有缓存需要刷新
+            db.query(ExistingFolderCache).update({"needs_refresh": True})
+            db.commit()
+            
+            return {"message": "已标记所有缓存需要刷新，下次扫描时将重新获取信息"}
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"刷新缓存失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"刷新缓存失败: {str(e)}")
+
+@app.post("/api/existing-folders/clear-cache")
+async def clear_existing_folders_cache():
+    """清除所有已有文件夹的缓存"""
+    try:
+        from ..models.database import get_db, ExistingFolderCache
+        
+        db = next(get_db())
+        try:
+            # 删除所有缓存
+            deleted_count = db.query(ExistingFolderCache).delete()
+            db.commit()
+            
+            return {"message": f"已清除 {deleted_count} 条缓存"}
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"清除缓存失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"清除缓存失败: {str(e)}")
 
 
 @app.post("/api/existing-folders/check-duplicates")

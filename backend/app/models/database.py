@@ -74,6 +74,36 @@ class LibrarySnapshot(Base):
         Index('idx_rjcode', 'rjcode'),
     )
 
+class ExistingFolderCache(Base):
+    """已有文件夹扫描缓存表"""
+    __tablename__ = 'existing_folder_cache'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    folder_path = Column(Text, unique=True, index=True)  # 文件夹完整路径
+    folder_name = Column(String(255))  # 文件夹名称
+    rjcode = Column(String(20), index=True)  # RJ号
+    
+    # 查重信息（JSON格式存储）
+    duplicate_info = Column(JSON, default=None)  # 查重结果
+    conflict_count = Column(Integer, default=0)  # 冲突数量
+    
+    # 元数据
+    file_count = Column(Integer, default=0)  # 文件数量
+    folder_size = Column(BigInteger, default=0)  # 文件夹大小
+    
+    # 缓存时间
+    cached_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # 是否需要刷新
+    needs_refresh = Column(Boolean, default=False)
+    
+    __table_args__ = (
+        Index('idx_existing_folder_path', 'folder_path'),
+        Index('idx_existing_rjcode', 'rjcode'),
+        Index('idx_existing_cached_at', 'cached_at'),
+    )
+
 class ConflictWork(Base):
     """问题作品表"""
     __tablename__ = 'conflict_works'

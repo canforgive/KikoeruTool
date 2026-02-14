@@ -54,6 +54,24 @@
           <el-icon><Search /></el-icon>
           检查选中项重复
         </el-button>
+        <el-button 
+          @click="refreshWithCache" 
+          :loading="loading"
+          style="margin-left: 20px;"
+          type="info"
+        >
+          <el-icon><Refresh /></el-icon>
+          刷新信息（使用缓存）
+        </el-button>
+        <el-button 
+          @click="refreshForce" 
+          :loading="loading"
+          style="margin-left: 10px;"
+          type="warning"
+        >
+          <el-icon><RefreshRight /></el-icon>
+          重新抓取
+        </el-button>
       </div>
 
       <!-- 冲突警告 -->
@@ -316,7 +334,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Refresh, Search, Folder, VideoPlay, Warning, Check, InfoFilled } from '@element-plus/icons-vue'
+import { Refresh, RefreshRight, Search, Folder, VideoPlay, Warning, Check, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
@@ -363,7 +381,7 @@ const filteredFolders = computed(() => {
 })
 
 onMounted(() => {
-  refreshFolders()
+  refreshWithCache() // 默认使用缓存刷新
 })
 
 async function refreshFolders() {
@@ -406,6 +424,111 @@ async function refreshFolders() {
               }
             } else if (data.type === 'complete') {
               let msg = data.message
+              ElMessage.success(msg)
+            } else if (data.type === 'error') {
+              ElMessage.error(data.error)
+            }
+          } catch (e) {
+            console.error('解析数据失败:', e, line)
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('获取文件夹列表失败:', error)
+    ElMessage.error('获取失败: ' + (error.message || '未知错误'))
+  } finally {
+    loading.value = false
+  }
+}
+
+// 使用缓存刷新
+async function refreshWithCache() {
+  // 使用缓存，不传 force_refresh 参数
+  await refreshFoldersWithOptions(false)
+}
+
+// 强制刷新（重新抓取API）
+async function refreshForce() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要重新抓取所有信息吗？这将清除缓存并重新调用API查询，可能需要较长时间。',
+      '确认重新抓取',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    
+    // 先刷新缓存标记
+    await axios.post('/api/existing-folders/refresh-cache')
+    ElMessage.success('已标记缓存需要刷新')
+    
+    // 强制刷新
+    await refreshFoldersWithOptions(true)
+  } catch (error) {
+    if (error === 'cancel' || error?.message === 'cancel') {
+      return
+    }
+    console.error('刷新缓存失败:', error)
+    ElMessage.error('刷新失败: ' + (error.message || '未知错误'))
+  }
+}
+
+// 带参数的刷新方法
+async function refreshFoldersWithOptions(forceRefresh = false) {
+  loading.value = true
+  folders.value = [] // 清空列表
+  conflictCount.value = 0
+  
+  try {
+    const url = `/api/existing-folders/scan?check_duplicates=${checkDuplicates.value}&force_refresh=${forceRefresh}`
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/x-ndjson'
+      }
+    })
+    
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let cachedCount = 0
+    let apiCount = 0
+    
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() // 保留不完整的最后一行
+      
+      for (const line of lines) {
+        if (line.trim()) {
+          try {
+            const data = JSON.parse(line)
+            
+            if (data.type === 'start') {
+              ElMessage.info(data.message)
+            } else if (data.type === 'folder') {
+              // 实时添加文件夹到列表
+              folders.value.push(data.folder)
+              if (data.folder.duplicate_info) {
+                conflictCount.value++
+              }
+              // 统计缓存/API
+              if (data.from_cache) {
+                cachedCount++
+              } else {
+                apiCount++
+              }
+            } else if (data.type === 'complete') {
+              let msg = data.message
+              if (cachedCount > 0 || apiCount > 0) {
+                msg += `（缓存: ${cachedCount}, API: ${apiCount}）`
+              }
               ElMessage.success(msg)
             } else if (data.type === 'error') {
               ElMessage.error(data.error)
