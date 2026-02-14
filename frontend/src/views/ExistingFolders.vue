@@ -80,10 +80,19 @@
         style="margin: 20px 0;"
       />
       
+      <!-- 扫描进度提示 -->
+      <el-alert
+        v-if="loading && folders.length > 0"
+        :title="`正在扫描... 已找到 ${folders.length} 个文件夹`"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 10px;"
+      />
+      
       <el-table
-        v-else
+        v-else-if="folders.length > 0 || !loading"
         :data="filteredFolders"
-        v-loading="loading"
         style="width: 100%"
         empty-text="暂无文件夹"
         row-key="path"
