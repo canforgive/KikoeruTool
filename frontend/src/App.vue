@@ -87,7 +87,9 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { Box, HomeFilled, List, WarningFilled, Setting, Document, Lock, Folder } from '@element-plus/icons-vue'
 import { useWatcherStore } from './stores'
-import { version as appVersion } from '../package.json'
+
+// 直接定义版本号（确保每次构建都会更新）
+const appVersion = '1.0.1'
 
 const watcherStore = useWatcherStore()
 const conflictCount = ref(0)

@@ -91,6 +91,14 @@
             >
               API重命名
             </el-button>
+            <el-button 
+              size="small" 
+              type="danger"
+              @click="deleteItem(row)"
+              title="删除此项目"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -235,6 +243,15 @@ const mappedPathInfo = ref({
 
 // Tampermonkey 脚本检测
 const tampermonkeyLoaded = ref(false)
+
+// 删除确认对话框
+const deleteDialogVisible = ref(false)
+const deleteItemInfo = ref({
+  path: '',
+  name: '',
+  type: '',
+  size: 0
+})
 
 // 过滤后的文件列表
 const filteredFiles = computed(() => {
@@ -592,6 +609,51 @@ async function apiRenameItem(row) {
     ElMessage.error('API重命名失败: ' + (error.response?.data?.detail || error.message))
   } finally {
     apiRenamingId.value = null
+  }
+}
+
+// 删除项目
+async function deleteItem(row) {
+  try {
+    // 先发送预删除请求，获取确认信息
+    const response = await axios.post('/api/library/delete', {
+      path: row.path,
+      confirmed: false
+    })
+    
+    if (response.data.need_confirm) {
+      const type = response.data.type === 'folder' ? '文件夹' : '文件'
+      const size = formatFileSize(response.data.size)
+      
+      // 显示确认对话框
+      await ElMessageBox.confirm(
+        `确定要删除以下${type}吗？\n\n名称: ${response.data.name}\n大小: ${size}\n\n此操作不可恢复！`,
+        '删除确认',
+        {
+          confirmButtonText: '确定删除',
+          cancelButtonText: '取消',
+          type: 'warning',
+          confirmButtonClass: 'el-button--danger'
+        }
+      )
+      
+      // 用户确认，执行删除
+      await axios.post('/api/library/delete', {
+        path: row.path,
+        confirmed: true
+      })
+      
+      ElMessage.success('删除成功')
+      
+      // 刷新列表
+      await refreshLibrary()
+    }
+  } catch (error) {
+    if (error === 'cancel' || error?.message === 'cancel') {
+      return // 用户取消
+    }
+    console.error('删除失败:', error)
+    ElMessage.error('删除失败: ' + (error.response?.data?.detail || error.message))
   }
 }
 </script>

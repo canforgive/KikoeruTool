@@ -1513,6 +1513,69 @@ def map_path_to_local(remote_path: str) -> tuple[str, bool]:
     
     return remote_path, False
 
+@app.post("/api/library/delete")
+async def delete_library_file(request: Request):
+    """删除库内文件或文件夹（需要确认）"""
+    try:
+        data = await request.json()
+        file_path = data.get("path")
+        confirmed = data.get("confirmed", False)
+        
+        if not file_path:
+            raise HTTPException(status_code=400, detail="缺少文件路径")
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        # 安全检查：确保在库目录内
+        config = get_config()
+        library_path = config.storage.library_path
+        if not file_path.startswith(library_path):
+            raise HTTPException(status_code=403, detail="只能删除库内的文件")
+        
+        if not confirmed:
+            # 返回需要确认的信息
+            import shutil
+            if os.path.isdir(file_path):
+                # 计算文件夹大小
+                total_size = 0
+                for dirpath, dirnames, filenames in os.walk(file_path):
+                    for f in filenames:
+                        fp = os.path.join(dirpath, f)
+                        total_size += os.path.getsize(fp)
+                return {
+                    "need_confirm": True,
+                    "type": "folder",
+                    "name": os.path.basename(file_path),
+                    "path": file_path,
+                    "size": total_size
+                }
+            else:
+                return {
+                    "need_confirm": True,
+                    "type": "file",
+                    "name": os.path.basename(file_path),
+                    "path": file_path,
+                    "size": os.path.getsize(file_path)
+                }
+        
+        # 执行删除
+        import shutil
+        if os.path.isdir(file_path):
+            shutil.rmtree(file_path)
+            logger.info(f"删除文件夹: {file_path}")
+        else:
+            os.remove(file_path)
+            logger.info(f"删除文件: {file_path}")
+        
+        return {"message": "删除成功", "path": file_path}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
+
 @app.post("/api/library/open-folder")
 async def open_library_folder(request: Request):
     """打开文件夹位置"""
