@@ -71,7 +71,7 @@
           </el-button>
         </div>
         <div class="version-info">
-          <span class="version-text">v{{ appVersion }}</span>
+          <span class="version-text">版本: v{{ appVersion }}</span>
         </div>
       </div>
     </el-aside>
@@ -175,7 +175,11 @@ async function toggleWatcher() {
 
 .version-text {
   font-size: 12px;
-  color: #64748b;
+  color: #94a3b8;
+  background-color: #0f172a;
+  padding: 2px 8px;
+  border-radius: 4px;
+  display: inline-block;
 }
 
 .main-content {
