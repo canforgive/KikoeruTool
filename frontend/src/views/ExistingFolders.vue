@@ -191,6 +191,15 @@
             </el-button>
             <!-- 无冲突时显示操作按钮组 -->
             <el-button-group v-else>
+              <el-tooltip content="迁移到库" placement="top">
+                <el-button 
+                  type="success" 
+                  size="small"
+                  @click="handleProcessSingle(row)"
+                >
+                  <el-icon><VideoPlay /></el-icon>
+                </el-button>
+              </el-tooltip>
               <el-tooltip content="删除文件夹" placement="top">
                 <el-button 
                   type="danger" 
@@ -903,6 +912,54 @@ async function handleRefreshFolder(row) {
     if (index !== -1) {
       folders.value[index].status = 'cached'
     }
+  }
+}
+
+// 处理单个文件夹（重命名、过滤、扁平化、移动入库）
+async function handleProcessSingle(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要处理文件夹 "${row.name}" 吗？\n\n将执行以下操作：\n• 重命名（根据元数据）\n• 过滤文件\n• 扁平化处理\n• 移动到库\n\n是否继续？`,
+      '确认处理',
+      {
+        confirmButtonText: '确认处理',
+        cancelButtonText: '取消',
+        type: 'info'
+      }
+    )
+    
+    processing.value = true
+    
+    // 调用处理接口，传入单个文件夹
+    const response = await axios.post('/api/existing-folders/process', {
+      folders: [row.path],
+      auto_classify: autoClassify.value
+    })
+    
+    resultData.value = {
+      success: true,
+      message: response.data.message,
+      tasks: response.data.tasks || []
+    }
+    resultDialogVisible.value = true
+    
+    // 处理成功后刷新列表（该文件夹会被移走）
+    setTimeout(() => {
+      refreshFolders()
+    }, 1000)
+    
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('处理失败:', error)
+      resultData.value = {
+        success: false,
+        message: error.response?.data?.detail || error.message,
+        tasks: []
+      }
+      resultDialogVisible.value = true
+    }
+  } finally {
+    processing.value = false
   }
 }
 </script>
