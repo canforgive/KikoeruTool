@@ -125,6 +125,14 @@ class PathMappingConfig(BaseModel):
     # 打开方式
     open_mode: str = "auto"  # auto: 自动判断, direct: 直接打开(同设备), mapped: 使用映射路径(跨设备)
 
+class KikoeruServerConfig(BaseModel):
+    """Kikoeru 服务器查重配置"""
+    enabled: bool = False  # 是否启用 Kikoeru 服务器查重
+    server_url: str = ""   # Kikoeru 服务器地址，如 http://192.168.1.100:8088
+    api_token: str = ""    # API 访问令牌
+    timeout: int = 10      # 请求超时(秒)
+    cache_ttl: int = 300   # 缓存时间(秒)
+
 class AppConfig(BaseModel):
     """应用配置"""
     storage: StorageConfig = StorageConfig()
@@ -147,6 +155,7 @@ class AppConfig(BaseModel):
     password_cleanup: PasswordCleanupConfig = PasswordCleanupConfig()
     processed_archive_cleanup: ProcessedArchiveCleanupConfig = ProcessedArchiveCleanupConfig()
     path_mapping: PathMappingConfig = PathMappingConfig()
+    kikoeru_server: KikoeruServerConfig = KikoeruServerConfig()
 
 # 全局配置实例
 _config: Optional[AppConfig] = None

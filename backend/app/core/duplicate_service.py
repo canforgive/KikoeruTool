@@ -139,8 +139,12 @@ class EnhancedDuplicateService:
         
         # 3. 检查 Kikoeru 服务器（如果启用）
         try:
-            kikoeru_config = self.config.get('kikoeru_server', {})
-            if kikoeru_config.get('enabled', False):
+            # 直接访问 Pydantic 模型的属性
+            kikoeru_enabled = False
+            if hasattr(self.config, 'kikoeru_server'):
+                kikoeru_enabled = self.config.kikoeru_server.enabled
+            
+            if kikoeru_enabled:
                 logger.debug(f"正在查询 Kikoeru 服务器: {rjcode}")
                 kikoeru_result = await self.kikoeru_service.check_duplicate(rjcode)
                 result.kikoeru_result = kikoeru_result

@@ -54,15 +54,19 @@ class KikoeruDuplicateService:
     def _load_config(self) -> KikoeruServerConfig:
         """从系统配置加载 Kikoeru 服务器配置"""
         config = get_config()
-        kikoeru_config = config.get('kikoeru_server', {})
-        
-        return KikoeruServerConfig(
-            enabled=kikoeru_config.get('enabled', False),
-            server_url=kikoeru_config.get('server_url', '').rstrip('/'),
-            api_token=kikoeru_config.get('api_token', ''),
-            timeout=kikoeru_config.get('timeout', 10),
-            cache_ttl=kikoeru_config.get('cache_ttl', 300)
-        )
+        # 直接访问 Pydantic 模型的属性
+        if hasattr(config, 'kikoeru_server'):
+            kikoeru_config = config.kikoeru_server
+            return KikoeruServerConfig(
+                enabled=kikoeru_config.enabled,
+                server_url=kikoeru_config.server_url.rstrip('/'),
+                api_token=kikoeru_config.api_token,
+                timeout=kikoeru_config.timeout,
+                cache_ttl=kikoeru_config.cache_ttl
+            )
+        else:
+            # 如果配置不存在，返回默认配置
+            return KikoeruServerConfig()
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取或创建 HTTP Session"""

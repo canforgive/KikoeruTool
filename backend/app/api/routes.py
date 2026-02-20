@@ -2733,15 +2733,26 @@ async def get_kikoeru_server_config():
     """获取 Kikoeru 服务器查重配置"""
     try:
         config = get_config()
-        kikoeru_config = config.get('kikoeru_server', {})
+        # 直接访问 Pydantic 模型的属性
+        kikoeru_config = config.kikoeru_server if hasattr(config, 'kikoeru_server') else None
         
-        return {
-            "enabled": kikoeru_config.get('enabled', False),
-            "server_url": kikoeru_config.get('server_url', ''),
-            "api_token": kikoeru_config.get('api_token', ''),  # 注意：生产环境可能需要隐藏
-            "timeout": kikoeru_config.get('timeout', 10),
-            "cache_ttl": kikoeru_config.get('cache_ttl', 300)
-        }
+        if kikoeru_config:
+            return {
+                "enabled": kikoeru_config.enabled,
+                "server_url": kikoeru_config.server_url,
+                "api_token": kikoeru_config.api_token,  # 注意：生产环境可能需要隐藏
+                "timeout": kikoeru_config.timeout,
+                "cache_ttl": kikoeru_config.cache_ttl
+            }
+        else:
+            # 返回默认配置
+            return {
+                "enabled": False,
+                "server_url": "",
+                "api_token": "",
+                "timeout": 10,
+                "cache_ttl": 300
+            }
     except Exception as e:
         logger.error(f"获取 Kikoeru 服务器配置失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取配置失败: {str(e)}")
@@ -2750,12 +2761,14 @@ async def get_kikoeru_server_config():
 async def update_kikoeru_server_config(config: KikoeruServerConfig):
     """更新 Kikoeru 服务器查重配置"""
     try:
-        from ..config.settings import save_config
+        from ..config.settings import save_config, get_config as get_current_config
         
-        current_config = get_config()
+        # 获取当前配置并转换为字典
+        current_config_obj = get_config()
+        config_dict = current_config_obj.model_dump()
         
-        # 更新配置
-        current_config['kikoeru_server'] = {
+        # 更新 Kikoeru 服务器配置
+        config_dict['kikoeru_server'] = {
             'enabled': config.enabled,
             'server_url': config.server_url.rstrip('/'),
             'api_token': config.api_token,
@@ -2763,8 +2776,8 @@ async def update_kikoeru_server_config(config: KikoeruServerConfig):
             'cache_ttl': config.cache_ttl
         }
         
-        # 保存配置
-        save_config(current_config)
+        # 保存配置（save_config 需要字典参数）
+        save_config(config_dict)
         
         # 重新加载服务配置
         service = get_kikoeru_service()
