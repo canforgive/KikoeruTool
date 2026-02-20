@@ -99,14 +99,16 @@ class KikoeruDuplicateService:
     def _get_headers(self) -> Dict[str, str]:
         """获取请求头，包含 API Token"""
         headers = {
-            'Accept': 'application/json',
-            'User-Agent': 'KikoeruTool-DuplicateCheck/1.0'
+            'Accept': 'application/json, text/plain, */*',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
         
         if self.config.api_token:
+            # 支持 Bearer Token 认证
             headers['Authorization'] = f'Bearer {self.config.api_token}'
-            # 也支持自定义 Header 名称
-            headers['X-API-Token'] = self.config.api_token
+            logger.debug(f"[Kikoeru] 使用 Token 认证: {self.config.api_token[:20]}...")
+        else:
+            logger.debug("[Kikoeru] 未配置 API Token，使用无认证请求")
         
         return headers
     
@@ -149,15 +151,21 @@ class KikoeruDuplicateService:
             
             session = await self._get_session()
             
-            logger.info(f"正在查询 Kikoeru 服务器: {rjcode} -> {self.config.server_url}")
+            logger.info(f"[Kikoeru] 正在查询: {rjcode}")
+            logger.info(f"[Kikoeru] 请求 URL: {url}")
+            logger.info(f"[Kikoeru] 请求头: {headers}")
             
             async with session.get(
                 url, 
                 headers=headers, 
                 timeout=aiohttp.ClientTimeout(total=self.config.timeout)
             ) as response:
+                logger.info(f"[Kikoeru] 响应状态: {response.status}")
+                
                 if response.status == 401:
-                    logger.error(f"Kikoeru 服务器认证失败: {rjcode}")
+                    error_text = await response.text()
+                    logger.error(f"[Kikoeru] 认证失败: {rjcode}")
+                    logger.error(f"[Kikoeru] 响应内容: {error_text[:500]}")
                     return KikoeruCheckResult(
                         is_found=False,
                         rjcode=rjcode,
@@ -165,7 +173,9 @@ class KikoeruDuplicateService:
                     )
                 
                 if response.status != 200:
-                    logger.warning(f"Kikoeru 服务器返回错误: {response.status}")
+                    error_text = await response.text()
+                    logger.warning(f"[Kikoeru] 服务器返回错误: {response.status}")
+                    logger.warning(f"[Kikoeru] 错误响应: {error_text[:500]}")
                     return KikoeruCheckResult(
                         is_found=False,
                         rjcode=rjcode,
@@ -173,6 +183,8 @@ class KikoeruDuplicateService:
                     )
                 
                 data = await response.json()
+                logger.info(f"[Kikoeru] 响应数据: {data}")
+                
                 result = self._parse_search_result(rjcode, data)
                 
                 # 缓存结果
@@ -180,9 +192,9 @@ class KikoeruDuplicateService:
                     self._set_cache(rjcode, result)
                 
                 if result.is_found:
-                    logger.info(f"✓ 在 Kikoeru 服务器找到: {rjcode} - {result.title}")
+                    logger.info(f"[Kikoeru] ✓ 找到作品: {rjcode} - {result.title}")
                 else:
-                    logger.debug(f"✗ Kikoeru 服务器未找到: {rjcode}")
+                    logger.info(f"[Kikoeru] ✗ 未找到: {rjcode}")
                 
                 return result
                 
