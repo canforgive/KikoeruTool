@@ -691,22 +691,96 @@ class SmartClassifier:
         """移动文件/文件夹，处理重名"""
 ```
 
-### 4.7 DuplicateService - 增强查重服务
+### 4.7 KikoeruDuplicateService - Kikoeru服务器查重服务
+
+**位置**: `backend/app/core/kikoeru_duplicate_service.py`
+
+**功能说明**: 通过 API 和 Token 访问本地部署的 Kikoeru 服务器进行查重，实现本地库和远程 Kikoeru 库的双重查重。
+
+**核心方法**:
+```python
+class KikoeruDuplicateService:
+    async def check_duplicate(
+        self, 
+        rjcode: str,
+        use_cache: bool = True
+    ) -> KikoeruCheckResult:
+        """
+        检查作品是否在 Kikoeru 服务器中
+        调用 /api/search 接口进行查询
+        """
+    
+    async def check_duplicates_batch(
+        self, 
+        rjcodes: List[str],
+        use_cache: bool = True
+    ) -> Dict[str, KikoeruCheckResult]:
+        """批量检查多个 RJ 号"""
+    
+    async def test_connection(self) -> Dict[str, any]:
+        """测试与 Kikoeru 服务器的连接"""
+    
+    def clear_cache(self):
+        """清除查重缓存"""
+```
+
+**配置项**:
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `enabled` | bool | false | 是否启用 Kikoeru 查重 |
+| `server_url` | string | "" | Kikoeru 服务器地址 |
+| `api_token` | string | "" | API 访问令牌 |
+| `timeout` | int | 10 | 请求超时(秒) |
+| `cache_ttl` | int | 300 | 缓存时间(秒) |
+
+**API 端点**:
+```
+GET    /api/kikoeru-server/config    # 获取配置
+POST   /api/kikoeru-server/config    # 更新配置
+POST   /api/kikoeru-server/test      # 测试连接
+POST   /api/kikoeru-server/check     # 查重检查
+POST   /api/kikoeru-server/clear-cache  # 清除缓存
+```
+
+**KikoeruCheckResult**:
+```python
+@dataclass
+class KikoeruCheckResult:
+    is_found: bool           # 是否找到
+    rjcode: str             # RJ号
+    work_id: int            # Kikoeru 作品ID
+    title: str              # 作品标题
+    circle_name: str        # 社团名
+    tags: List[str]         # 标签列表
+    total_count: int        # 搜索结果总数
+    source: str            # 结果来源
+    checked_at: datetime   # 检查时间
+```
+
+### 4.8 DuplicateService - 增强查重服务
 
 **位置**: `backend/app/core/duplicate_service.py`
+
+**功能说明**: 综合查重服务，集成本地查重、关联作品检测和 Kikoeru 服务器查重。
 
 **核心方法**:
 ```python
 class EnhancedDuplicateService:
-    def check_duplicate_enhanced(
+    def __init__(self):
+        self.dlsite_service = get_dlsite_service()
+        self.kikoeru_service = get_kikoeru_service()  # 新增
+    
+    async def check_duplicate_enhanced(
         self, 
         rjcode: str, 
         check_linked_works: bool = True,
         cue_languages: List[str] = ["CHI_HANS", "CHI_HANT", "ENG"]
     ) -> DuplicateCheckResult:
         """
-        增强查重检查
-        支持检测: 直接重复、翻译版本、关联作品
+        综合查重检查流程:
+        1. 本地直接重复检查
+        2. 关联作品检查
+        3. Kikoeru 服务器检查（如启用）
         """
     
     def _check_direct_duplicate(self, rjcode: str) -> Optional[dict]:
@@ -726,9 +800,23 @@ class EnhancedDuplicateService:
         """获取推荐的冲突解决选项"""
 ```
 
+**DuplicateCheckResult 扩展**:
+```python
+@dataclass
+class DuplicateCheckResult:
+    is_duplicate: bool
+    direct_duplicate: Optional[Dict]
+    linked_works_found: List[Dict]
+    conflict_type: str                    # DUPLICATE, LINKED_WORK, etc.
+    related_rjcodes: List[str]
+    analysis_info: Dict
+    kikoeru_result: Optional[KikoeruCheckResult]  # 新增: Kikoeru查重结果
+```
+
 **冲突类型**:
 | 类型 | 说明 |
 |------|------|
+| `NONE` | 无冲突 |
 | `DUPLICATE` | 直接重复（相同RJ号） |
 | `LINKED_WORK_ORIGINAL` | 原作已存在 |
 | `LINKED_WORK_TRANSLATION` | 翻译版已存在 |
@@ -1481,6 +1569,12 @@ else:
 || POST | `/api/existing-folders/process-with-resolution` | 带解决方案处理 |
 || GET | `/api/linked-works/{rjcode}` | 获取关联作品链 |
 || GET | `/api/linked-works/{rjcode}/check-library` | 检查库中关联作品 |
+| **Kikoeru 服务器查重** ||||
+|| GET | `/api/kikoeru-server/config` | 获取配置 |
+|| POST | `/api/kikoeru-server/config` | 更新配置 |
+|| POST | `/api/kikoeru-server/test` | 测试连接 |
+|| POST | `/api/kikoeru-server/check` | 查重检查 |
+|| POST | `/api/kikoeru-server/clear-cache` | 清除缓存 |
 | **库存管理** ||||
 || GET | `/api/library/files` | 获取库文件列表 |
 || POST | `/api/library/rename` | 重命名 |
@@ -1506,7 +1600,8 @@ else:
 | RenameService | `core/rename_service.py` | 重命名 | `rename()`, `_compile_name()`, `_flatten_single_subfolder()` |
 | FilterService | `core/filter_service.py` | 文件过滤 | `filter()`, `_should_filter_file()` |
 | SmartClassifier | `core/classifier.py` | 智能分类 | `classify_and_move()`, `_apply_classification_rules()` |
-| DuplicateService | `core/duplicate_service.py` | 增强查重服务 | `check_duplicate_enhanced()` - 主查重方法<br>`_check_direct_duplicate()` - 直接重复检查<br>`_check_linked_works_in_library()` - 关联作品检查<br>`_analyze_linked_works()` - 关联作品分析<br>`get_conflict_resolution_options()` - 解决方案推荐<br>`_get_lang_priority()` - 语言优先级<br>`_get_lang_name()` - 语言名称映射 |
+| KikoeruDuplicateService | `core/kikoeru_duplicate_service.py` | Kikoeru服务器查重 | `check_duplicate()` - 查询Kikoeru服务器<br>`check_duplicates_batch()` - 批量查询<br>`test_connection()` - 连接测试<br>`clear_cache()` - 清除缓存 |
+| DuplicateService | `core/duplicate_service.py` | 增强查重服务 | `check_duplicate_enhanced()` - 主查重方法（集成本地+Kikoeru）<br>`_check_direct_duplicate()` - 直接重复检查<br>`_check_linked_works_in_library()` - 关联作品检查<br>`_analyze_linked_works()` - 关联作品分析<br>`get_conflict_resolution_options()` - 解决方案推荐<br>`_get_lang_priority()` - 语言优先级<br>`_get_lang_name()` - 语言名称映射 |
 | DLsiteService | `core/dlsite_service.py` | DLsite API | `get_translation_info()`, `get_linked_works()`, `get_work_info()` |
 | FolderWatcher | `core/watcher.py` | 文件监视 | `start()`, `stop()`, `_on_archive_detected()` |
 
@@ -1598,6 +1693,12 @@ else:
 | template | `rename.template` | string | `{rjcode} {work_name}` | 重命名模板 |
 | flatten_single_subfolder | `rename.flatten_single_subfolder` | bool | true | 扁平化单层文件夹 |
 | remove_empty_folders | `rename.remove_empty_folders` | bool | true | 移除空文件夹 |
+| **Kikoeru 服务器配置** ||||
+| enabled | `kikoeru_server.enabled` | bool | false | 启用 Kikoeru 服务器查重 |
+| server_url | `kikoeru_server.server_url` | string | "" | Kikoeru 服务器地址 |
+| api_token | `kikoeru_server.api_token` | string | "" | API 访问令牌 |
+| timeout | `kikoeru_server.timeout` | int | 10 | 请求超时(秒) |
+| cache_ttl | `kikoeru_server.cache_ttl` | int | 300 | 缓存时间(秒) |
 
 ---
 
@@ -1689,7 +1790,71 @@ await axios.post('/api/existing-folders/process-with-resolution', {
 });
 ```
 
-#### E.3 修改语言优先级
+#### E.3 Kikoeru 服务器查重使用
+
+**后端调用**:
+```python
+from backend.app.core.kikoeru_duplicate_service import get_kikoeru_service
+
+async def check_kikoeru_example():
+    service = get_kikoeru_service()
+    
+    # 单个查询
+    result = await service.check_duplicate("RJ123456")
+    if result.is_found:
+        print(f"✓ 在 Kikoeru 找到: {result.title}")
+        print(f"  社团: {result.circle_name}")
+        print(f"  标签: {', '.join(result.tags)}")
+    else:
+        print("✗ Kikoeru 中未找到")
+    
+    # 批量查询
+    results = await service.check_duplicates_batch(
+        ["RJ123456", "RJ789012", "RJ345678"]
+    )
+    for rj, res in results.items():
+        print(f"{rj}: {'✓' if res.is_found else '✗'}")
+    
+    # 测试连接
+    test_result = await service.test_connection()
+    print(f"连接状态: {test_result['message']}")
+    print(f"延迟: {test_result['latency']:.0f}ms")
+```
+
+**前端调用**:
+```javascript
+// 1. 配置 Kikoeru 服务器
+await axios.post('/api/kikoeru-server/config', {
+  enabled: true,
+  server_url: 'http://192.168.1.100:8088',
+  api_token: 'your-api-token',
+  timeout: 10,
+  cache_ttl: 300
+});
+
+// 2. 测试连接
+const testResult = await axios.post('/api/kikoeru-server/test');
+console.log(testResult.data.success ? '连接成功' : '连接失败');
+
+// 3. 查重检查
+const checkResult = await axios.post('/api/kikoeru-server/check?rjcode=RJ123456');
+console.log('Kikoeru中是否存在:', checkResult.data.is_found);
+
+// 4. 清除缓存
+await axios.post('/api/kikoeru-server/clear-cache');
+```
+
+**在综合查重中自动使用**:
+```python
+# 当 kikoeru_server.enabled = true 时
+# check_duplicate_enhanced 会自动查询 Kikoeru 服务器
+
+result = await duplicate_service.check_duplicate_enhanced("RJ123456")
+if result.kikoeru_result:
+    print(f"Kikoeru查询结果: {result.kikoeru_result.is_found}")
+```
+
+#### E.4 修改语言优先级
 
 ```python
 # 在 duplicate_service.py 中修改 _get_lang_priority 方法
@@ -1707,7 +1872,7 @@ def _get_lang_priority(self, lang: str) -> int:
     return priorities.get(lang, 99)
 ```
 
-#### E.4 添加新的冲突类型
+#### E.5 添加新的冲突类型
 
 ```python
 # 1. 在 DuplicateCheckResult 中添加新类型
