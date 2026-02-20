@@ -127,6 +127,7 @@ class ConfigResponse(BaseModel):
     password_cleanup: Optional[dict] = None
     processed_archive_cleanup: Optional[dict] = None
     path_mapping: Optional[dict] = None
+    kikoeru_server: Optional[dict] = None
 
 # API路由
 @app.post("/api/tasks", response_model=TaskResponse)
@@ -228,16 +229,17 @@ async def get_configuration():
     """获取配置"""
     config = get_config()
     return ConfigResponse(
-        storage=config.storage.dict(),
-        processing=config.processing.dict(),
-        watcher=config.watcher.dict(),
-        filter=config.filter.dict(),
-        metadata=config.metadata.dict(),
-        rename=config.rename.dict(),
-        classification=[rule.dict() for rule in config.classification],
-        password_cleanup=config.password_cleanup.dict(),
-        processed_archive_cleanup=config.processed_archive_cleanup.dict(),
-        path_mapping=config.path_mapping.dict()
+        storage=config.storage.model_dump(),
+        processing=config.processing.model_dump(),
+        watcher=config.watcher.model_dump(),
+        filter=config.filter.model_dump(),
+        metadata=config.metadata.model_dump(),
+        rename=config.rename.model_dump(),
+        classification=[rule.model_dump() for rule in config.classification],
+        password_cleanup=config.password_cleanup.model_dump(),
+        processed_archive_cleanup=config.processed_archive_cleanup.model_dump(),
+        path_mapping=config.path_mapping.model_dump(),
+        kikoeru_server=config.kikoeru_server.model_dump() if hasattr(config, 'kikoeru_server') else None
     )
 
 @app.post("/api/config")
