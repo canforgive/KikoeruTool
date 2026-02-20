@@ -2813,9 +2813,28 @@ async def test_kikoeru_server_connection():
 @app.post("/api/kikoeru-server/check")
 async def check_kikoeru_duplicate(rjcode: str):
     """检查作品是否在 Kikoeru 服务器中"""
+    logger.info(f"=" * 60)
+    logger.info(f"[Kikoeru查重] 开始查询: {rjcode}")
+    
     try:
+        # 获取配置信息
+        config = get_config()
+        if hasattr(config, 'kikoeru_server'):
+            kikoeru_config = config.kikoeru_server
+            logger.info(f"[Kikoeru查重] 配置状态: enabled={kikoeru_config.enabled}, server_url={kikoeru_config.server_url}")
+        else:
+            logger.warning("[Kikoeru查重] 未找到 kikoeru_server 配置")
+        
         service = get_kikoeru_service()
+        logger.info(f"[Kikoeru查重] 开始调用服务查询...")
+        
         result = await service.check_duplicate(rjcode, use_cache=True)
+        
+        logger.info(f"[Kikoeru查重] 查询完成: rjcode={result.rjcode}, is_found={result.is_found}, source={result.source}")
+        if result.is_found:
+            logger.info(f"[Kikoeru查重] 找到作品: title={result.title}, circle={result.circle_name}")
+        else:
+            logger.info(f"[Kikoeru查重] 未找到作品")
         
         return {
             "rjcode": result.rjcode,
@@ -2827,8 +2846,12 @@ async def check_kikoeru_duplicate(rjcode: str):
             "checked_at": result.checked_at.isoformat() if result.checked_at else None
         }
     except Exception as e:
-        logger.error(f"Kikoeru 查重检查失败: {e}")
+        logger.error(f"[Kikoeru查重] 查询失败: {rjcode}, 错误: {e}")
+        logger.exception(e)
         raise HTTPException(status_code=500, detail=f"查重检查失败: {str(e)}")
+    finally:
+        logger.info(f"[Kikoeru查重] 查询结束: {rjcode}")
+        logger.info(f"=" * 60)
 
 @app.post("/api/kikoeru-server/clear-cache")
 async def clear_kikoeru_cache():

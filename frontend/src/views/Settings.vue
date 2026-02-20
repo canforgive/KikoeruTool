@@ -849,6 +849,36 @@
             </el-col>
           </el-row>
 
+          <!-- RJ号测试查询 -->
+          <el-row :gutter="20" style="margin-top: 20px;">
+            <el-col :span="24">
+              <el-form-item label="测试查重">
+                <div style="display: flex; gap: 10px;">
+                  <el-input 
+                    v-model="kikoeruTestRjcode" 
+                    placeholder="输入RJ号进行测试，例如: RJ123456"
+                    style="width: 300px;"
+                    :disabled="!config.kikoeru_server.enabled"
+                  >
+                    <template #prefix>
+                      <el-icon><Search /></el-icon>
+                    </template>
+                  </el-input>
+                  <el-button 
+                    type="primary" 
+                    @click="testKikoeruCheck"
+                    :loading="testingKikoeruCheck"
+                    :disabled="!config.kikoeru_server.enabled || !kikoeruTestRjcode"
+                  >
+                    <el-icon><Search /></el-icon>
+                    测试查重
+                  </el-button>
+                </div>
+                <div class="form-tip">输入RJ号测试Kikoeru服务器查重功能</div>
+              </el-form-item>
+            </el-col>
+          </el-row>
+
           <el-form-item>
             <div class="kikoeru-info">
               <el-alert
@@ -866,7 +896,7 @@
           </el-form-item>
         </el-form>
 
-        <!-- 测试结果对话框 -->
+        <!-- 连接测试结果对话框 -->
         <el-dialog
           v-model="kikoeruTestDialogVisible"
           title="连接测试结果"
@@ -883,6 +913,38 @@
               </el-tag>
             </template>
           </el-result>
+        </el-dialog>
+
+        <!-- 查重结果对话框 -->
+        <el-dialog
+          v-model="kikoeruCheckDialogVisible"
+          title="Kikoeru 查重结果"
+          width="500px"
+        >
+          <div v-if="kikoeruCheckResult" class="kikoeru-check-result">
+            <el-result
+              :icon="kikoeruCheckResult.is_found ? 'success' : 'info'"
+              :title="kikoeruCheckResult.is_found ? '作品已存在' : '作品未找到'"
+            >
+              <template #sub-title>
+                <div style="text-align: left;">
+                  <p><strong>RJ号:</strong> {{ kikoeruCheckResult.rjcode }}</p>
+                  <p v-if="kikoeruCheckResult.is_found">
+                    <strong>标题:</strong> {{ kikoeruCheckResult.title || '未知' }}
+                  </p>
+                  <p v-if="kikoeruCheckResult.is_found">
+                    <strong>社团:</strong> {{ kikoeruCheckResult.circle_name || '未知' }}
+                  </p>
+                  <p v-if="kikoeruCheckResult.is_found && kikoeruCheckResult.tags && kikoeruCheckResult.tags.length > 0">
+                    <strong>标签:</strong> {{ kikoeruCheckResult.tags.join(', ') }}
+                  </p>
+                  <p v-if="kikoeruCheckResult.message" style="color: #f56c6c; margin-top: 10px;">
+                    <strong>错误信息:</strong> {{ kikoeruCheckResult.message }}
+                  </p>
+                </div>
+              </template>
+            </el-result>
+          </div>
         </el-dialog>
       </el-card>
 
@@ -1027,7 +1089,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { Folder, FolderOpened, Plus, Delete, Check, QuestionFilled, Tools, Warning, View, ArrowRight, Document, Connection, Key, Link } from '@element-plus/icons-vue'
+import { Folder, FolderOpened, Plus, Delete, Check, QuestionFilled, Tools, Warning, View, ArrowRight, Document, Connection, Key, Link, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
 import { useConfigStore } from '../stores'
@@ -1535,6 +1597,12 @@ const kikoeruTestResult = ref({
   latency: 0
 })
 
+// Kikoeru 查重测试相关
+const kikoeruTestRjcode = ref('')
+const testingKikoeruCheck = ref(false)
+const kikoeruCheckDialogVisible = ref(false)
+const kikoeruCheckResult = ref(null)
+
 async function saveKikoeruConfig() {
   try {
     // 使用统一的配置保存接口
@@ -1583,6 +1651,43 @@ async function testKikoeruConnection() {
     ElMessage.error('测试连接失败')
   } finally {
     testingKikoeru.value = false
+  }
+}
+
+// 测试 Kikoeru 查重功能
+async function testKikoeruCheck() {
+  if (!kikoeruTestRjcode.value) {
+    ElMessage.warning('请输入RJ号')
+    return
+  }
+  
+  testingKikoeruCheck.value = true
+  try {
+    const response = await axios.post('/api/kikoeru-server/check', null, {
+      params: {
+        rjcode: kikoeruTestRjcode.value
+      }
+    })
+    
+    kikoeruCheckResult.value = response.data
+    kikoeruCheckDialogVisible.value = true
+    
+    if (response.data.is_found) {
+      ElMessage.success(`找到作品: ${response.data.title || response.data.rjcode}`)
+    } else {
+      ElMessage.info('未在 Kikoeru 服务器中找到该作品')
+    }
+  } catch (error) {
+    console.error('Kikoeru 查重测试失败:', error)
+    kikoeruCheckResult.value = {
+      rjcode: kikoeruTestRjcode.value,
+      is_found: false,
+      message: error.response?.data?.detail || error.message
+    }
+    kikoeruCheckDialogVisible.value = true
+    ElMessage.error('查重测试失败: ' + (error.response?.data?.detail || error.message))
+  } finally {
+    testingKikoeruCheck.value = false
   }
 }
 
