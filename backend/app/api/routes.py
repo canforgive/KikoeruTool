@@ -2828,40 +2828,74 @@ async def test_kikoeru_server_connection():
         }
 
 @app.post("/api/kikoeru-server/check")
-async def check_kikoeru_duplicate(rjcode: str):
-    """检查作品是否在 Kikoeru 服务器中"""
+async def check_kikoeru_duplicate(
+    rjcode: str, 
+    check_linkages: bool = True,
+    cue_languages: str = "CHI_HANS CHI_HANT ENG"
+):
+    """检查作品及其关联作品是否在 Kikoeru 服务器中
+    
+    Args:
+        rjcode: RJ号
+        check_linkages: 是否检查关联作品
+        cue_languages: 语言列表，空格分隔（如 'CHI_HANS CHI_HANT ENG'）
+    """
     logger.info(f"=" * 60)
-    logger.info(f"[Kikoeru查重] 开始查询: {rjcode}")
+    logger.info(f"[Kikoeru查重] 开始查询: {rjcode}, check_linkages={check_linkages}")
     
     try:
-        # 获取配置信息
-        config = get_config()
-        if hasattr(config, 'kikoeru_server'):
-            kikoeru_config = config.kikoeru_server
-            logger.info(f"[Kikoeru查重] 配置状态: enabled={kikoeru_config.enabled}, server_url={kikoeru_config.server_url}")
-        else:
-            logger.warning("[Kikoeru查重] 未找到 kikoeru_server 配置")
+        # 解析语言列表
+        lang_list = cue_languages.split() if cue_languages else ["CHI_HANS", "CHI_HANT", "ENG"]
+        logger.info(f"[Kikoeru查重] 检查语言: {lang_list}")
         
         service = get_kikoeru_service()
-        logger.info(f"[Kikoeru查重] 开始调用服务查询...")
         
-        result = await service.check_duplicate(rjcode, use_cache=True)
-        
-        logger.info(f"[Kikoeru查重] 查询完成: rjcode={result.rjcode}, is_found={result.is_found}, source={result.source}")
-        if result.is_found:
-            logger.info(f"[Kikoeru查重] 找到作品: title={result.title}, circle={result.circle_name}")
+        if check_linkages:
+            # 查询关联作品
+            logger.info(f"[Kikoeru查重] 执行关联作品查询...")
+            results = await service.check_duplicate_with_linkages(rjcode, lang_list, use_cache=True)
+            
+            # 格式化返回结果
+            found_works = []
+            for rj, res in results.items():
+                if res.is_found:
+                    found_works.append({
+                        "rjcode": rj,
+                        "title": res.title,
+                        "circle_name": res.circle_name,
+                        "tags": res.tags
+                    })
+            
+            primary_result = results.get(rjcode, KikoeruCheckResult(rjcode=rjcode))
+            
+            logger.info(f"[Kikoeru查重] 关联查询完成: 总共 {len(results)} 个作品，找到 {len(found_works)} 个")
+            
+            return {
+                "rjcode": rjcode,
+                "is_found": primary_result.is_found or len(found_works) > 0,
+                "title": primary_result.title,
+                "circle_name": primary_result.circle_name,
+                "tags": primary_result.tags,
+                "linked_works_found": found_works,
+                "total_checked": len(results),
+                "source": "kikoeru_with_linkages",
+                "checked_at": datetime.now().isoformat()
+            }
         else:
-            logger.info(f"[Kikoeru查重] 未找到作品")
-        
-        return {
-            "rjcode": result.rjcode,
-            "is_found": result.is_found,
-            "title": result.title,
-            "circle_name": result.circle_name,
-            "tags": result.tags,
-            "source": result.source,
-            "checked_at": result.checked_at.isoformat() if result.checked_at else None
-        }
+            # 只查询单个作品
+            result = await service.check_duplicate(rjcode, use_cache=True)
+            
+            return {
+                "rjcode": result.rjcode,
+                "is_found": result.is_found,
+                "title": result.title,
+                "circle_name": result.circle_name,
+                "tags": result.tags,
+                "linked_works_found": [],
+                "total_checked": 1,
+                "source": result.source,
+                "checked_at": result.checked_at.isoformat() if result.checked_at else None
+            }
     except Exception as e:
         logger.error(f"[Kikoeru查重] 查询失败: {rjcode}, 错误: {e}")
         logger.exception(e)

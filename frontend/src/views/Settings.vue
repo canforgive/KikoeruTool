@@ -921,7 +921,7 @@
         <el-dialog
           v-model="kikoeruCheckDialogVisible"
           title="Kikoeru 查重结果"
-          width="500px"
+          width="600px"
         >
           <div v-if="kikoeruCheckResult" class="kikoeru-check-result">
             <el-result
@@ -930,16 +930,40 @@
             >
               <template #sub-title>
                 <div style="text-align: left;">
-                  <p><strong>RJ号:</strong> {{ kikoeruCheckResult.rjcode }}</p>
-                  <p v-if="kikoeruCheckResult.is_found">
-                    <strong>标题:</strong> {{ kikoeruCheckResult.title || '未知' }}
+                  <p><strong>查询 RJ 号:</strong> {{ kikoeruCheckResult.rjcode }}</p>
+                  <p v-if="kikoeruCheckResult.title">
+                    <strong>标题:</strong> {{ kikoeruCheckResult.title }}
                   </p>
-                  <p v-if="kikoeruCheckResult.is_found">
-                    <strong>社团:</strong> {{ kikoeruCheckResult.circle_name || '未知' }}
+                  
+                  <!-- 关联作品列表 -->
+                  <div v-if="kikoeruCheckResult.linked_works_found && kikoeruCheckResult.linked_works_found.length > 0" style="margin-top: 20px;">
+                    <el-divider content-position="left">
+                      在 Kikoeru 中找到 {{ kikoeruCheckResult.linked_works_found.length }} 个关联作品
+                    </el-divider>
+                    
+                    <el-table :data="kikoeruCheckResult.linked_works_found" size="small" style="width: 100%">
+                      <el-table-column prop="rjcode" label="RJ号" width="120" />
+                      <el-table-column prop="title" label="标题" min-width="150">
+                        <template #default="{ row }">
+                          {{ row.title || '未知标题' }}
+                        </template>
+                      </el-table-column>
+                      <el-table-column prop="circle_name" label="社团" width="150">
+                        <template #default="{ row }">
+                          {{ row.circle_name || '未知社团' }}
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                  </div>
+                  
+                  <p v-else-if="!kikoeruCheckResult.is_found" style="color: #909399; margin-top: 20px;">
+                    未在 Kikoeru 服务器中找到该作品及其关联作品
                   </p>
-                  <p v-if="kikoeruCheckResult.is_found && kikoeruCheckResult.tags && kikoeruCheckResult.tags.length > 0">
-                    <strong>标签:</strong> {{ kikoeruCheckResult.tags.join(', ') }}
+                  
+                  <p style="color: #909399; font-size: 12px; margin-top: 15px;">
+                    共检查 {{ kikoeruCheckResult.total_checked }} 个作品
                   </p>
+                  
                   <p v-if="kikoeruCheckResult.message" style="color: #f56c6c; margin-top: 10px;">
                     <strong>错误信息:</strong> {{ kikoeruCheckResult.message }}
                   </p>

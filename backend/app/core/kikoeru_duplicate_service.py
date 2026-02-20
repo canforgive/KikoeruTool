@@ -10,6 +10,7 @@ import aiohttp
 from datetime import datetime, timedelta
 
 from ..config.settings import get_config
+from ..core.dlsite_service import get_dlsite_service
 
 logger = logging.getLogger(__name__)
 
@@ -385,6 +386,66 @@ class KikoeruDuplicateService:
                 'latency': latency
             }
     
+    async def check_duplicate_with_linkages(
+        self, 
+        rjcode: str,
+        cue_languages: List[str] = None,
+        use_cache: bool = True
+    ) -> Dict[str, KikoeruCheckResult]:
+        """
+        检查作品及其所有关联作品是否在 Kikoeru 服务器中
+        
+        支持递归查询关联作品链（原作、翻译版、子版本等）
+        
+        Args:
+            rjcode: RJ号
+            cue_languages: 需要检查的语言列表
+            use_cache: 是否使用缓存
+        
+        Returns:
+            Dict[str, KikoeruCheckResult]: 所有关联作品及其查重结果
+        """
+        if cue_languages is None:
+            cue_languages = ['CHI_HANS', 'CHI_HANT', 'ENG']
+        
+        results = {}
+        
+        # 1. 首先查询原始作品
+        primary_result = await self.check_duplicate(rjcode, use_cache)
+        results[rjcode] = primary_result
+        
+        if not self.config.enabled:
+            return results
+        
+        try:
+            # 2. 获取关联作品链
+            logger.info(f"[Kikoeru关联查询] 开始获取 {rjcode} 的关联作品链")
+            dlsite_service = get_dlsite_service()
+            linked_works = await dlsite_service.get_full_linkage(rjcode, cue_languages)
+            
+            if len(linked_works) > 1:
+                logger.info(f"[Kikoeru关联查询] 发现 {len(linked_works)} 个关联作品: {list(linked_works.keys())}")
+                
+                # 3. 查询所有关联作品（排除已查询的原始作品）
+                linked_rjcodes = [w.workno for w in linked_works.values() if w.workno != rjcode]
+                
+                if linked_rjcodes:
+                    logger.info(f"[Kikoeru关联查询] 将查询 {len(linked_rjcodes)} 个关联作品")
+                    linked_results = await self.check_duplicates_batch(linked_rjcodes, use_cache)
+                    results.update(linked_results)
+                    
+                    # 4. 记录找到的作品
+                    found_works = [rj for rj, res in results.items() if res.is_found]
+                    if found_works:
+                        logger.info(f"[Kikoeru关联查询] 在关联作品中找到 {len(found_works)} 个: {found_works}")
+            else:
+                logger.info(f"[Kikoeru关联查询] {rjcode} 没有关联作品")
+                
+        except Exception as e:
+            logger.error(f"[Kikoeru关联查询] 获取关联作品失败 {rjcode}: {e}")
+        
+        return results
+
     async def close(self):
         """关闭 HTTP Session"""
         if self._session and not self._session.closed:
