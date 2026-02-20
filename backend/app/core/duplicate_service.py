@@ -1,5 +1,5 @@
 """
-改进的查重服务 - 支持关联作品检测
+改进的查重服务 - 支持关联作品检测和 Kikoeru 服务器查重
 参考 VoiceLinks 的 SearchResult 和 LinkedWorks 实现
 """
 import asyncio
@@ -12,6 +12,11 @@ import os
 
 from ..models.database import LibrarySnapshot, ConflictWork, get_db
 from ..core.dlsite_service import get_dlsite_service, LinkedWork
+from ..core.kikoeru_duplicate_service import (
+    get_kikoeru_service, 
+    KikoeruCheckResult,
+    KikoeruDuplicateService
+)
 from ..config.settings import get_config
 
 logger = logging.getLogger(__name__)
@@ -26,6 +31,7 @@ class DuplicateCheckResult:
     conflict_type: str = "NONE"  # DUPLICATE, LINKED_WORK, LANGUAGE_VARIANT, MULTIPLE_VERSIONS
     related_rjcodes: List[str] = field(default_factory=list)  # 所有关联的 RJ 号
     analysis_info: Dict = field(default_factory=dict)  # 详细的分析信息
+    kikoeru_result: Optional[KikoeruCheckResult] = None  # Kikoeru 服务器查重结果
 
 
 @dataclass
@@ -42,11 +48,12 @@ class LinkedWorkInLibrary:
 
 
 class EnhancedDuplicateService:
-    """增强的查重服务"""
+    """增强的查重服务 - 支持本地查重和 Kikoeru 服务器查重"""
     
     def __init__(self):
         self.config = get_config()
         self.dlsite_service = get_dlsite_service()
+        self.kikoeru_service = get_kikoeru_service()
     
     async def check_duplicate_enhanced(
         self, 
@@ -129,6 +136,28 @@ class EnhancedDuplicateService:
             
             except Exception as e:
                 logger.error(f"检查关联作品失败 {rjcode}: {e}")
+        
+        # 3. 检查 Kikoeru 服务器（如果启用）
+        try:
+            kikoeru_config = self.config.get('kikoeru_server', {})
+            if kikoeru_config.get('enabled', False):
+                logger.debug(f"正在查询 Kikoeru 服务器: {rjcode}")
+                kikoeru_result = await self.kikoeru_service.check_duplicate(rjcode)
+                result.kikoeru_result = kikoeru_result
+                
+                if kikoeru_result.is_found:
+                    logger.info(f"✓ Kikoeru 服务器找到作品: {rjcode} - {kikoeru_result.title}")
+                    # 如果本地未发现重复但 Kikoeru 中有，可以标记为外部库存在
+                    if not result.is_duplicate:
+                        result.analysis_info['in_kikoeru_server'] = {
+                            'title': kikoeru_result.title,
+                            'circle': kikoeru_result.circle_name,
+                            'tags': kikoeru_result.tags
+                        }
+                else:
+                    logger.debug(f"✗ Kikoeru 服务器未找到: {rjcode}")
+        except Exception as e:
+            logger.error(f"Kikoeru 服务器查重失败 {rjcode}: {e}")
         
         return result
     

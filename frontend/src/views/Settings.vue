@@ -761,6 +761,131 @@
         </el-dialog>
       </el-card>
 
+      <!-- Kikoeru 服务器查重配置 -->
+      <el-card class="setting-card">
+        <template #header>
+          <div class="card-header">
+            <span>Kikoeru 服务器查重</span>
+            <div class="header-actions">
+              <el-switch 
+                v-model="config.kikoeru_server.enabled" 
+                active-text="启用"
+                @change="saveKikoeruConfig"
+              />
+              <el-button 
+                type="primary" 
+                size="small" 
+                @click="testKikoeruConnection"
+                :loading="testingKikoeru"
+                :disabled="!config.kikoeru_server.enabled || !config.kikoeru_server.server_url"
+              >
+                <el-icon><Connection /></el-icon> 测试连接
+              </el-button>
+            </div>
+          </div>
+        </template>
+
+        <el-form 
+          :model="config.kikoeru_server" 
+          label-position="top"
+          :disabled="!config.kikoeru_server.enabled"
+        >
+          <el-row :gutter="20">
+            <el-col :span="16">
+              <el-form-item label="服务器地址">
+                <el-input 
+                  v-model="config.kikoeru_server.server_url" 
+                  placeholder="例如: http://192.168.1.100:8088"
+                  @blur="saveKikoeruConfig"
+                >
+                  <template #prefix>
+                    <el-icon><Link /></el-icon>
+                  </template>
+                </el-input>
+                <div class="form-tip">Kikoeru 服务器的完整 URL 地址</div>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="API Token">
+                <el-input 
+                  v-model="config.kikoeru_server.api_token" 
+                  placeholder="访问令牌"
+                  show-password
+                  @blur="saveKikoeruConfig"
+                >
+                  <template #prefix>
+                    <el-icon><Key /></el-icon>
+                  </template>
+                </el-input>
+                <div class="form-tip">用于认证的 API Token（如需要）</div>
+              </el-form-item>
+            </el-col>
+          </el-row>
+
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="请求超时（秒）">
+                <el-input-number 
+                  v-model="config.kikoeru_server.timeout" 
+                  :min="5" 
+                  :max="60"
+                  :step="5"
+                  @change="saveKikoeruConfig"
+                />
+                <div class="form-tip">查询请求的超时时间</div>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="缓存时间（秒）">
+                <el-input-number 
+                  v-model="config.kikoeru_server.cache_ttl" 
+                  :min="60" 
+                  :max="3600"
+                  :step="60"
+                  @change="saveKikoeruConfig"
+                />
+                <div class="form-tip">查重结果的缓存时间</div>
+              </el-form-item>
+            </el-col>
+          </el-row>
+
+          <el-form-item>
+            <div class="kikoeru-info">
+              <el-alert
+                title="关于 Kikoeru 服务器查重"
+                type="info"
+                :closable="false"
+              >
+                <template #default>
+                  <p>启用后，系统在查重时会同时查询本地库和远程 Kikoeru 服务器。</p>
+                  <p>适用于多个设备/服务器共享同一个 Kikoeru 库的场景。</p>
+                  <p>支持的 URL 格式: <code>http://ip:port</code> 或 <code>https://domain</code></p>
+                </template>
+              </el-alert>
+            </div>
+          </el-form-item>
+        </el-form>
+
+        <!-- 测试结果对话框 -->
+        <el-dialog
+          v-model="kikoeruTestDialogVisible"
+          title="连接测试结果"
+          width="400px"
+        >
+          <el-result
+            :icon="kikoeruTestResult.success ? 'success' : 'error'"
+            :title="kikoeruTestResult.success ? '连接成功' : '连接失败'"
+            :sub-title="kikoeruTestResult.message"
+          >
+            <template #extra v-if="kikoeruTestResult.latency > 0">
+              <el-tag :type="kikoeruTestResult.success ? 'success' : 'info'">
+                延迟: {{ kikoeruTestResult.latency.toFixed(0) }}ms
+              </el-tag>
+            </template>
+          </el-result>
+        </el-dialog>
+      </el-card>
+
       <!-- 分类规则 -->
       <el-card class="setting-card">
         <template #header>
@@ -902,7 +1027,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { Folder, FolderOpened, Plus, Delete, Check, QuestionFilled, Tools, Warning, View, ArrowRight, Document } from '@element-plus/icons-vue'
+import { Folder, FolderOpened, Plus, Delete, Check, QuestionFilled, Tools, Warning, View, ArrowRight, Document, Connection, Key, Link } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
 import { useConfigStore } from '../stores'
@@ -999,6 +1124,13 @@ const defaultConfig = {
     enabled: false,
     open_mode: 'auto',
     rules: []
+  },
+  kikoeru_server: {
+    enabled: false,
+    server_url: '',
+    api_token: '',
+    timeout: 10,
+    cache_ttl: 300
   }
 }
 
@@ -1366,6 +1498,57 @@ const testMappingResult = ref({
   mapped_path: '',
   is_mapped: false
 })
+
+// Kikoeru 服务器查重相关
+const testingKikoeru = ref(false)
+const kikoeruTestDialogVisible = ref(false)
+const kikoeruTestResult = ref({
+  success: false,
+  message: '',
+  latency: 0
+})
+
+async function saveKikoeruConfig() {
+  try {
+    // 保存到后端
+    await axios.post('/api/kikoeru-server/config', config.value.kikoeru_server)
+    ElMessage.success('Kikoeru 服务器配置已保存')
+  } catch (error) {
+    console.error('保存 Kikoeru 配置失败:', error)
+    ElMessage.error('保存配置失败: ' + (error.response?.data?.detail || error.message))
+  }
+}
+
+async function testKikoeruConnection() {
+  if (!config.value.kikoeru_server.server_url) {
+    ElMessage.warning('请先配置服务器地址')
+    return
+  }
+  
+  testingKikoeru.value = true
+  try {
+    const response = await axios.post('/api/kikoeru-server/test')
+    kikoeruTestResult.value = response.data
+    kikoeruTestDialogVisible.value = true
+    
+    if (response.data.success) {
+      ElMessage.success('连接测试成功')
+    } else {
+      ElMessage.error('连接测试失败: ' + response.data.message)
+    }
+  } catch (error) {
+    console.error('测试 Kikoeru 连接失败:', error)
+    kikoeruTestResult.value = {
+      success: false,
+      message: error.response?.data?.detail || error.message,
+      latency: 0
+    }
+    kikoeruTestDialogVisible.value = true
+    ElMessage.error('测试连接失败')
+  } finally {
+    testingKikoeru.value = false
+  }
+}
 
 function addPathMappingRule() {
   if (!config.value.path_mapping.rules) {

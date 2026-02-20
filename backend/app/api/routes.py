@@ -2717,6 +2717,121 @@ async def delete_kikoeru_config(config_id: str):
         db.close()
 
 
+# ========== Kikoeru 服务器查重配置 API ==========
+from ..core.kikoeru_duplicate_service import get_kikoeru_service, KikoeruDuplicateService
+
+class KikoeruServerConfig(BaseModel):
+    """Kikoeru 服务器配置模型"""
+    enabled: bool = False
+    server_url: str = ""
+    api_token: str = ""
+    timeout: int = 10
+    cache_ttl: int = 300
+
+@app.get("/api/kikoeru-server/config")
+async def get_kikoeru_server_config():
+    """获取 Kikoeru 服务器查重配置"""
+    try:
+        config = get_config()
+        kikoeru_config = config.get('kikoeru_server', {})
+        
+        return {
+            "enabled": kikoeru_config.get('enabled', False),
+            "server_url": kikoeru_config.get('server_url', ''),
+            "api_token": kikoeru_config.get('api_token', ''),  # 注意：生产环境可能需要隐藏
+            "timeout": kikoeru_config.get('timeout', 10),
+            "cache_ttl": kikoeru_config.get('cache_ttl', 300)
+        }
+    except Exception as e:
+        logger.error(f"获取 Kikoeru 服务器配置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取配置失败: {str(e)}")
+
+@app.post("/api/kikoeru-server/config")
+async def update_kikoeru_server_config(config: KikoeruServerConfig):
+    """更新 Kikoeru 服务器查重配置"""
+    try:
+        from ..config.settings import save_config
+        
+        current_config = get_config()
+        
+        # 更新配置
+        current_config['kikoeru_server'] = {
+            'enabled': config.enabled,
+            'server_url': config.server_url.rstrip('/'),
+            'api_token': config.api_token,
+            'timeout': config.timeout,
+            'cache_ttl': config.cache_ttl
+        }
+        
+        # 保存配置
+        save_config(current_config)
+        
+        # 重新加载服务配置
+        service = get_kikoeru_service()
+        service.config = service._load_config()
+        
+        return {
+            "message": "Kikoeru 服务器配置已更新",
+            "config": {
+                "enabled": config.enabled,
+                "server_url": config.server_url,
+                "timeout": config.timeout,
+                "cache_ttl": config.cache_ttl
+            }
+        }
+    except Exception as e:
+        logger.error(f"更新 Kikoeru 服务器配置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
+
+@app.post("/api/kikoeru-server/test")
+async def test_kikoeru_server_connection():
+    """测试 Kikoeru 服务器连接"""
+    try:
+        service = get_kikoeru_service()
+        result = await service.test_connection()
+        
+        return result
+    except Exception as e:
+        logger.error(f"测试 Kikoeru 服务器连接失败: {e}")
+        return {
+            "success": False,
+            "message": f"测试失败: {str(e)}",
+            "latency": 0
+        }
+
+@app.post("/api/kikoeru-server/check")
+async def check_kikoeru_duplicate(rjcode: str):
+    """检查作品是否在 Kikoeru 服务器中"""
+    try:
+        service = get_kikoeru_service()
+        result = await service.check_duplicate(rjcode, use_cache=True)
+        
+        return {
+            "rjcode": result.rjcode,
+            "is_found": result.is_found,
+            "title": result.title,
+            "circle_name": result.circle_name,
+            "tags": result.tags,
+            "source": result.source,
+            "checked_at": result.checked_at.isoformat() if result.checked_at else None
+        }
+    except Exception as e:
+        logger.error(f"Kikoeru 查重检查失败: {e}")
+        raise HTTPException(status_code=500, detail=f"查重检查失败: {str(e)}")
+
+@app.post("/api/kikoeru-server/clear-cache")
+async def clear_kikoeru_cache():
+    """清除 Kikoeru 查重缓存"""
+    try:
+        service = get_kikoeru_service()
+        service.clear_cache()
+        
+        return {"message": "Kikoeru 查重缓存已清除"}
+    except Exception as e:
+        logger.error(f"清除 Kikoeru 缓存失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清除缓存失败: {str(e)}")
+
+
 # 静态文件服务（前端）
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
