@@ -393,9 +393,9 @@ class KikoeruDuplicateService:
         use_cache: bool = True
     ) -> Dict[str, KikoeruCheckResult]:
         """
-        检查作品及其所有关联作品是否在 Kikoeru 服务器中
+        检查作品及其关联作品是否在 Kikoeru 服务器中
         
-        支持递归查询关联作品链（原作、翻译版、子版本等）
+        只查询直接关联的作品（原作、翻译版），避免递归查询过多无关作品
         
         Args:
             rjcode: RJ号
@@ -418,31 +418,37 @@ class KikoeruDuplicateService:
             return results
         
         try:
-            # 2. 获取关联作品链
-            logger.info(f"[Kikoeru关联查询] 开始获取 {rjcode} 的关联作品链")
+            # 2. 获取关联作品（只获取直接关联的，不递归）
+            logger.info(f"[Kikoeru关联查询] 开始获取 {rjcode} 的关联作品")
             dlsite_service = get_dlsite_service()
-            linked_works = await dlsite_service.get_full_linkage(rjcode, cue_languages)
+            linked_works = await dlsite_service.get_linked_works(rjcode)
             
             if len(linked_works) > 1:
                 logger.info(f"[Kikoeru关联查询] 发现 {len(linked_works)} 个关联作品: {list(linked_works.keys())}")
                 
-                # 3. 查询所有关联作品（排除已查询的原始作品）
-                linked_rjcodes = [w.workno for w in linked_works.values() if w.workno != rjcode]
+                # 3. 筛选需要查询的语言版本（只查询 cue_languages 中指定的语言）
+                linked_rjcodes = []
+                for workno, work_info in linked_works.items():
+                    if workno != rjcode and work_info.lang in cue_languages:
+                        linked_rjcodes.append(workno)
                 
                 if linked_rjcodes:
-                    logger.info(f"[Kikoeru关联查询] 将查询 {len(linked_rjcodes)} 个关联作品")
+                    logger.info(f"[Kikoeru关联查询] 将查询 {len(linked_rjcodes)} 个关联作品（语言匹配）: {linked_rjcodes}")
                     linked_results = await self.check_duplicates_batch(linked_rjcodes, use_cache)
                     results.update(linked_results)
                     
                     # 4. 记录找到的作品
-                    found_works = [rj for rj, res in results.items() if res.is_found]
+                    found_works = [rj for rj, res in results.items() if res.is_found and rj != rjcode]
                     if found_works:
                         logger.info(f"[Kikoeru关联查询] 在关联作品中找到 {len(found_works)} 个: {found_works}")
+                else:
+                    logger.info(f"[Kikoeru关联查询] 没有符合语言要求的关联作品")
             else:
                 logger.info(f"[Kikoeru关联查询] {rjcode} 没有关联作品")
                 
         except Exception as e:
             logger.error(f"[Kikoeru关联查询] 获取关联作品失败 {rjcode}: {e}")
+            logger.exception(e)
         
         return results
 
