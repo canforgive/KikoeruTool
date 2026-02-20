@@ -770,8 +770,15 @@
               <el-switch 
                 v-model="config.kikoeru_server.enabled" 
                 active-text="启用"
-                @change="saveKikoeruConfig"
               />
+              <el-button 
+                type="success" 
+                size="small" 
+                @click="saveKikoeruConfig"
+                :loading="savingKikoeru"
+              >
+                <el-icon><Check /></el-icon> 保存配置
+              </el-button>
               <el-button 
                 type="primary" 
                 size="small" 
@@ -788,7 +795,6 @@
         <el-form 
           :model="config.kikoeru_server" 
           label-position="top"
-          :disabled="!config.kikoeru_server.enabled"
         >
           <el-row :gutter="20">
             <el-col :span="16">
@@ -796,7 +802,6 @@
                 <el-input 
                   v-model="config.kikoeru_server.server_url" 
                   placeholder="例如: http://192.168.1.100:8088"
-                  @blur="saveKikoeruConfig"
                 >
                   <template #prefix>
                     <el-icon><Link /></el-icon>
@@ -811,7 +816,6 @@
                   v-model="config.kikoeru_server.api_token" 
                   placeholder="访问令牌"
                   show-password
-                  @blur="saveKikoeruConfig"
                 >
                   <template #prefix>
                     <el-icon><Key /></el-icon>
@@ -830,7 +834,6 @@
                   :min="5" 
                   :max="60"
                   :step="5"
-                  @change="saveKikoeruConfig"
                 />
                 <div class="form-tip">查询请求的超时时间</div>
               </el-form-item>
@@ -842,7 +845,6 @@
                   :min="60" 
                   :max="3600"
                   :step="60"
-                  @change="saveKikoeruConfig"
                 />
                 <div class="form-tip">查重结果的缓存时间</div>
               </el-form-item>
@@ -1590,6 +1592,7 @@ const testMappingResult = ref({
 
 // Kikoeru 服务器查重相关
 const testingKikoeru = ref(false)
+const savingKikoeru = ref(false)
 const kikoeruTestDialogVisible = ref(false)
 const kikoeruTestResult = ref({
   success: false,
@@ -1604,6 +1607,9 @@ const kikoeruCheckDialogVisible = ref(false)
 const kikoeruCheckResult = ref(null)
 
 async function saveKikoeruConfig() {
+  savingKikoeru.value = true
+  console.log('开始保存 Kikoeru 配置:', config.value.kikoeru_server)
+  
   try {
     // 使用统一的配置保存接口
     const configToSave = {
@@ -1615,11 +1621,18 @@ async function saveKikoeruConfig() {
         cache_ttl: config.value.kikoeru_server.cache_ttl
       }
     }
-    await axios.post('/api/config', configToSave)
+    
+    console.log('发送配置数据:', configToSave)
+    const response = await axios.post('/api/config', configToSave)
+    console.log('保存响应:', response.data)
+    
     ElMessage.success('Kikoeru 服务器配置已保存')
   } catch (error) {
     console.error('保存 Kikoeru 配置失败:', error)
+    console.error('错误详情:', error.response?.data)
     ElMessage.error('保存配置失败: ' + (error.response?.data?.detail || error.message))
+  } finally {
+    savingKikoeru.value = false
   }
 }
 

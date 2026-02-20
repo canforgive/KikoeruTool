@@ -302,6 +302,21 @@ async def update_configuration(request: Request):
             config_data['path_mapping']['rules'] = validated_path_rules
             logger.info(f"验证后的路径映射规则数: {len(validated_path_rules)}")
         
+        # 处理 Kikoeru 服务器配置
+        if 'kikoeru_server' in config_data:
+            logger.info(f"[KIKOERU] 接收到 Kikoeru 服务器配置: {config_data['kikoeru_server']}")
+            try:
+                # 验证 KikoeruServerConfig
+                from ..config.settings import KikoeruServerConfig
+                kikoeru_config = KikoeruServerConfig(**config_data['kikoeru_server'])
+                config_data['kikoeru_server'] = kikoeru_config.model_dump()
+                logger.info(f"[KIKOERU] 配置验证通过: enabled={kikoeru_config.enabled}, server_url={kikoeru_config.server_url}")
+            except Exception as e:
+                logger.error(f"[KIKOERU] Kikoeru 配置验证失败: {e}")
+                # 如果验证失败，保留原始配置
+        else:
+            logger.info("[KIKOERU] 未接收到 Kikoeru 服务器配置")
+        
         result = save_config(config_data)
         logger.info(f"配置已保存，分类规则数: {len(config_data.get('classification', []))}")
 
