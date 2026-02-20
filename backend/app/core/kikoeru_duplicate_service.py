@@ -4,6 +4,7 @@ Kikoeru 服务器查重服务
 """
 import logging
 import asyncio
+import re
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
 import aiohttp
@@ -29,7 +30,7 @@ class KikoeruServerConfig:
 class KikoeruCheckResult:
     """Kikoeru 服务器查重结果"""
     is_found: bool = False           # 是否在 Kikoeru 中找到
-    rjcode: str = ""                 # RJ号
+    rjcode: str = ""                 # 查询的RJ号
     work_id: int = 0                 # Kikoeru 中的作品ID
     title: str = ""                  # 作品标题
     circle_name: str = ""            # 社团名
@@ -37,6 +38,9 @@ class KikoeruCheckResult:
     total_count: int = 0             # 搜索结果总数
     source: str = "kikoeru"          # 结果来源
     checked_at: datetime = field(default_factory=datetime.now)
+    match_type: str = "exact"        # 匹配类型: exact(精确), fuzzy(模糊)
+    matched_rjcode: str = ""         # 实际匹配的RJ号（模糊匹配时使用）
+    tolerance: int = 0               # 模糊匹配的容差值
 
 
 class KikoeruDuplicateService:
@@ -188,14 +192,22 @@ class KikoeruDuplicateService:
                 
                 result = self._parse_search_result(rjcode, data)
                 
+                # 如果精确匹配未找到，尝试宽容搜索（RJ号±1）
+                if not result.is_found:
+                    logger.info(f"[Kikoeru] 精确匹配未找到，尝试宽容搜索（±1）")
+                    fuzzy_result = await self._check_fuzzy(rjcode, session, headers, use_cache)
+                    if fuzzy_result.is_found:
+                        logger.info(f"[Kikoeru] ✓ 宽容匹配成功: {rjcode} -> {fuzzy_result.matched_rjcode}")
+                        return fuzzy_result
+                
                 # 缓存结果
                 if use_cache:
                     self._set_cache(rjcode, result)
                 
                 if result.is_found:
-                    logger.info(f"[Kikoeru] ✓ 找到作品: {rjcode} - {result.title}")
+                    logger.info(f"[Kikoeru] ✓ 精确匹配成功: {rjcode} - {result.title}")
                 else:
-                    logger.info(f"[Kikoeru] ✗ 未找到: {rjcode}")
+                    logger.info(f"[Kikoeru] ✗ 未找到: {rjcode}（包括±1宽容搜索）")
                 
                 return result
                 
@@ -220,6 +232,77 @@ class KikoeruDuplicateService:
         if not rjcode.startswith('RJ') and not rjcode.startswith('BJ') and not rjcode.startswith('VJ'):
             rjcode = 'RJ' + rjcode
         return rjcode
+    
+    async def _check_fuzzy(
+        self, 
+        rjcode: str, 
+        session: aiohttp.ClientSession, 
+        headers: Dict[str, str],
+        use_cache: bool
+    ) -> KikoeruCheckResult:
+        """
+        宽容搜索：尝试 RJ 号 ±1
+        
+        Args:
+            rjcode: 原始 RJ 号
+            session: HTTP Session
+            headers: 请求头
+            use_cache: 是否使用缓存
+        
+        Returns:
+            KikoeruCheckResult: 查重结果（包含模糊匹配信息）
+        """
+        # 提取数字部分
+        import re
+        match = re.match(r'(RJ|BJ|VJ)(\d+)', rjcode.upper())
+        if not match:
+            return KikoeruCheckResult(rjcode=rjcode)
+        
+        prefix = match.group(1)
+        num = int(match.group(2))
+        
+        # 尝试 ±1
+        for delta in [-1, 1]:
+            fuzzy_num = num + delta
+            if fuzzy_num < 0:
+                continue
+            
+            # 构建模糊 RJ 号（保持相同位数）
+            original_len = len(match.group(2))
+            fuzzy_rjcode = f"{prefix}{fuzzy_num:0{original_len}d}"
+            
+            try:
+                url = self._build_search_url(fuzzy_rjcode)
+                logger.info(f"[Kikoeru] 尝试模糊匹配: {fuzzy_rjcode}")
+                
+                async with session.get(
+                    url, 
+                    headers=headers, 
+                    timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        result = self._parse_search_result(fuzzy_rjcode, data)
+                        
+                        if result.is_found:
+                            # 找到模糊匹配
+                            result.rjcode = rjcode  # 保持原始 RJ 号
+                            result.match_type = "fuzzy"
+                            result.matched_rjcode = fuzzy_rjcode
+                            result.tolerance = delta
+                            
+                            if use_cache:
+                                self._set_cache(rjcode, result)
+                            
+                            logger.info(f"[Kikoeru] 模糊匹配成功: {rjcode} -> {fuzzy_rjcode}")
+                            return result
+                            
+            except Exception as e:
+                logger.debug(f"[Kikoeru] 模糊匹配失败 {fuzzy_rjcode}: {e}")
+                continue
+        
+        # 未找到模糊匹配
+        return KikoeruCheckResult(rjcode=rjcode)
     
     def _parse_search_result(self, rjcode: str, data: dict) -> KikoeruCheckResult:
         """解析 Kikoeru 搜索结果"""
