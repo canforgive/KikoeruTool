@@ -2735,7 +2735,7 @@ async def delete_kikoeru_config(config_id: str):
 
 
 # ========== Kikoeru 服务器查重配置 API ==========
-from ..core.kikoeru_duplicate_service import get_kikoeru_service, KikoeruDuplicateService
+from ..core.kikoeru_duplicate_service import get_kikoeru_service, KikoeruDuplicateService, KikoeruCheckResult
 
 class KikoeruServerConfig(BaseModel):
     """Kikoeru 服务器配置模型"""
