@@ -2759,25 +2759,23 @@ async def get_kikoeru_server_config():
 
 @app.post("/api/kikoeru-server/config")
 async def update_kikoeru_server_config(config: KikoeruServerConfig):
-    """更新 Kikoeru 服务器查重配置"""
+    """更新 Kikoeru 服务器查重配置（已弃用，请使用 /api/config）"""
     try:
-        from ..config.settings import save_config, get_config as get_current_config
+        from ..config.settings import save_config
         
-        # 获取当前配置并转换为字典
-        current_config_obj = get_config()
-        config_dict = current_config_obj.model_dump()
-        
-        # 更新 Kikoeru 服务器配置
-        config_dict['kikoeru_server'] = {
-            'enabled': config.enabled,
-            'server_url': config.server_url.rstrip('/'),
-            'api_token': config.api_token,
-            'timeout': config.timeout,
-            'cache_ttl': config.cache_ttl
+        # 只更新 kikoeru_server 部分配置
+        config_to_save = {
+            'kikoeru_server': {
+                'enabled': config.enabled,
+                'server_url': config.server_url.rstrip('/'),
+                'api_token': config.api_token,
+                'timeout': config.timeout,
+                'cache_ttl': config.cache_ttl
+            }
         }
         
-        # 保存配置（save_config 需要字典参数）
-        save_config(config_dict)
+        # 保存配置
+        save_config(config_to_save)
         
         # 重新加载服务配置
         service = get_kikoeru_service()

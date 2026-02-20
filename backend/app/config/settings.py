@@ -332,60 +332,76 @@ def get_config() -> AppConfig:
         return load_config()
     return _config
 
+def deep_merge(base: dict, update: dict) -> dict:
+    """深度合并两个字典"""
+    result = base.copy()
+    for key, value in update.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
 def save_config(config_data: dict, config_path: str = None) -> AppConfig:
-    """保存配置到文件"""
+    """保存配置到文件（支持部分更新）"""
     global _config
     
-    # 先初始化 logger
     logger = logging.getLogger(__name__)
     
     if config_path is None:
-        # 优先从环境变量读取配置路径
         env_config_path = os.environ.get('CONFIG_PATH')
         if env_config_path:
             config_path = env_config_path
-            logger.info(f"从环境变量 CONFIG_PATH 读取配置路径: {config_path}")
         else:
-            # 根据当前文件位置确定配置路径
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            # 从 backend/app/config/settings.py 到项目根目录
             project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
             config_path = os.path.join(project_root, 'config', 'config.yaml')
     
-    # 转换为绝对路径
     config_path = os.path.abspath(config_path)
     logger.info(f"保存配置到: {config_path}")
     
     # 确保目录存在
     config_dir = os.path.dirname(config_path)
     os.makedirs(config_dir, exist_ok=True)
-    logger.info(f"配置目录: {config_dir}")
     
-    # 写入文件
     try:
+        # 读取现有配置（如果存在）
+        existing_config = {}
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                existing_config = yaml.safe_load(f) or {}
+                logger.info(f"读取现有配置: {len(existing_config)} 个顶层键")
+        
+        # 深度合并配置
+        merged_config = deep_merge(existing_config, config_data)
+        logger.info(f"合并后配置: {len(merged_config)} 个顶层键")
+        
+        # 验证配置有效性（尝试创建 AppConfig）
+        try:
+            test_config = AppConfig(**merged_config)
+            logger.info("配置验证通过")
+        except Exception as e:
+            logger.error(f"配置验证失败: {e}")
+            # 如果验证失败，尝试使用当前内存中的配置作为基础
+            if _config:
+                current_dict = _config.model_dump()
+                merged_config = deep_merge(current_dict, config_data)
+                test_config = AppConfig(**merged_config)
+                logger.info("使用内存配置作为基础后验证通过")
+        
+        # 写入文件
         with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-        logger.info(f"配置已成功写入文件")
+            yaml.dump(merged_config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        
+        # 更新内存中的配置
+        _config = AppConfig(**merged_config)
+        logger.info("配置已成功保存并更新")
+        
+        return _config
+        
     except Exception as e:
-        logger.error(f"写入配置文件失败: {e}")
+        logger.error(f"保存配置失败: {e}")
         raise
-    
-    # 验证文件是否写入成功
-    if os.path.exists(config_path):
-        file_size = os.path.getsize(config_path)
-        logger.info(f"配置文件大小: {file_size} bytes")
-    else:
-        logger.error("配置文件写入后不存在！")
-    
-    # 重新加载配置前，确保新配置包含所有必要字段
-    # 获取当前配置作为基础（Pydantic v2 使用 model_dump()）
-    current_config = _config.model_dump() if _config else {}
-    # 合并新配置
-    merged_config = {**current_config, **config_data}
-    _config = AppConfig(**merged_config)
-    logger.info("配置已更新并保存")
-
-    return _config
 
 def reload_config() -> AppConfig:
     """重新加载配置（用于配置变更后）"""

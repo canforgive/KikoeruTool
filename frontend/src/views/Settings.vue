@@ -1537,8 +1537,17 @@ const kikoeruTestResult = ref({
 
 async function saveKikoeruConfig() {
   try {
-    // 保存到后端
-    await axios.post('/api/kikoeru-server/config', config.value.kikoeru_server)
+    // 使用统一的配置保存接口
+    const configToSave = {
+      kikoeru_server: {
+        enabled: config.value.kikoeru_server.enabled,
+        server_url: config.value.kikoeru_server.server_url,
+        api_token: config.value.kikoeru_server.api_token,
+        timeout: config.value.kikoeru_server.timeout,
+        cache_ttl: config.value.kikoeru_server.cache_ttl
+      }
+    }
+    await axios.post('/api/config', configToSave)
     ElMessage.success('Kikoeru 服务器配置已保存')
   } catch (error) {
     console.error('保存 Kikoeru 配置失败:', error)
