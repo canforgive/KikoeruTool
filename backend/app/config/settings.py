@@ -210,10 +210,10 @@ def load_config(config_path: str = None) -> AppConfig:
                     except Exception as e:
                         logger.warning(f"分类规则加载失败: {rule_data}, 错误: {e}, 使用默认规则")
                 if validated_rules:
-                    config_data['classification'] = [r.dict() for r in validated_rules]
+                    config_data['classification'] = [r.model_dump() for r in validated_rules]
                 else:
                     config_data['classification'] = [
-                        ClassificationRule(type="none", enabled=True, path_template="", custom_name=None, fallback=None, max_tags=None, rjcode_range=None).dict()
+                        ClassificationRule(type="none", enabled=True, path_template="", custom_name=None, fallback=None, max_tags=None, rjcode_range=None).model_dump()
                     ]
             
             # 确保 filter.rules 字段格式正确
@@ -229,7 +229,7 @@ def load_config(config_path: str = None) -> AppConfig:
                     except Exception as e:
                         logger.warning(f"过滤规则加载失败: {rule_data}, 错误: {e}, 跳过此规则")
                 if validated_filter_rules:
-                    config_data['filter']['rules'] = [r.dict() for r in validated_filter_rules]
+                    config_data['filter']['rules'] = [r.model_dump() for r in validated_filter_rules]
             
             # 确保 rename 配置完整（兼容旧配置）
             if 'rename' in config_data:
@@ -321,7 +321,7 @@ def load_config(config_path: str = None) -> AppConfig:
         config_dir = os.path.dirname(config_path)
         os.makedirs(config_dir, exist_ok=True)
         with open(config_path, 'w', encoding='utf-8') as f:
-            yaml.dump(_config.dict(), f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            yaml.dump(_config.model_dump(), f, allow_unicode=True, default_flow_style=False, sort_keys=False)
         logger.info(f"默认配置已保存到: {config_path}")
     
     return _config
@@ -378,8 +378,8 @@ def save_config(config_data: dict, config_path: str = None) -> AppConfig:
         logger.error("配置文件写入后不存在！")
     
     # 重新加载配置前，确保新配置包含所有必要字段
-    # 获取当前配置作为基础
-    current_config = _config.dict() if _config else {}
+    # 获取当前配置作为基础（Pydantic v2 使用 model_dump()）
+    current_config = _config.model_dump() if _config else {}
     # 合并新配置
     merged_config = {**current_config, **config_data}
     _config = AppConfig(**merged_config)

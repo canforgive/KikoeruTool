@@ -1320,6 +1320,33 @@ async function loadConfig() {
         mergedConfig.path_mapping.rules = []
       }
 
+      // 确保 kikoeru_server 配置完整
+      if (!mergedConfig.kikoeru_server) {
+        mergedConfig.kikoeru_server = {
+          enabled: false,
+          server_url: '',
+          api_token: '',
+          timeout: 10,
+          cache_ttl: 300
+        }
+      }
+      // 确保 kikoeru_server 的字段都存在
+      if (mergedConfig.kikoeru_server.enabled === undefined) {
+        mergedConfig.kikoeru_server.enabled = false
+      }
+      if (mergedConfig.kikoeru_server.server_url === undefined) {
+        mergedConfig.kikoeru_server.server_url = ''
+      }
+      if (mergedConfig.kikoeru_server.api_token === undefined) {
+        mergedConfig.kikoeru_server.api_token = ''
+      }
+      if (mergedConfig.kikoeru_server.timeout === undefined) {
+        mergedConfig.kikoeru_server.timeout = 10
+      }
+      if (mergedConfig.kikoeru_server.cache_ttl === undefined) {
+        mergedConfig.kikoeru_server.cache_ttl = 300
+      }
+
       config.value = mergedConfig
       console.log('配置加载成功，分类规则:', config.value.classification)
     }
