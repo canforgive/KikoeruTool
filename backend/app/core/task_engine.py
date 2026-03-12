@@ -401,35 +401,51 @@ class TaskEngine:
                 rename_service = RenameService()
                 renamed_path = await rename_service.rename(extracted_path, task)
                 logger.debug(f"[{rjcode}] 重命名后路径: {renamed_path}")
-                
+
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     return
-                
+
+                # 获取配置
+                from ..config.settings import get_config
+                config = get_config()
+
+                # 简繁转换（在重命名后、过滤前）
+                if hasattr(config, 'asmr_sync') and getattr(config.asmr_sync, 'simplify_chinese_enabled', False):
+                    from .subtitle_sync_service import SubtitleSyncService
+                    subtitle_svc = SubtitleSyncService()
+                    task.update_progress(60, "字幕繁简转换中")
+                    simplify_result = subtitle_svc.convert_subtitles_to_simplified_in_folder(renamed_path)
+                    if simplify_result['converted_files'] > 0:
+                        logger.info(f"[{rjcode}] 字幕繁简转换完成: 处理 {simplify_result['total_files']} 个文件, "
+                                   f"转换 {simplify_result['converted_files']} 个文件")
+
+                await task.wait_if_paused()
+                if task.is_cancelled():
+                    return
+
                 logger.debug(f"[{rjcode}] 步骤3: 过滤")
                 task.update_progress(70, "过滤文件中")
                 await filter_service.filter(renamed_path, task)
-                
+
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     return
-                
+
                 logger.debug(f"[{rjcode}] 步骤4: 扁平化")
-                from ..config.settings import get_config
-                config = get_config()
                 if config.rename.flatten_single_subfolder:
                     task.update_progress(75, "扁平化文件夹结构")
                     renamed_path = rename_service._flatten_single_subfolder(renamed_path)
                     logger.debug(f"[{rjcode}] 扁平化后路径: {renamed_path}")
-                
+
                 if config.rename.remove_empty_folders:
                     task.update_progress(78, "清理空文件夹")
                     rename_service.remove_empty_folders(renamed_path, remove_root=False)
-                
+
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     return
-                
+
                 logger.debug(f"[{rjcode}] 步骤5: 智能分类")
                 if task.auto_classify:
                     task.update_progress(80, "智能分类")
