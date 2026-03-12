@@ -1031,6 +1031,16 @@ async def resolve_conflict(conflict_id: str, action: dict):
                 if config.rename.remove_empty_folders:
                     rename_service.remove_empty_folders(renamed_path, remove_root=False)
 
+                # 简繁转换（与 AUTO_PROCESS 流程保持一致）
+                if hasattr(config, 'asmr_sync') and getattr(config.asmr_sync, 'simplify_chinese_enabled', False):
+                    from ..core.subtitle_sync_service import get_subtitle_sync_service
+                    subtitle_svc = get_subtitle_sync_service()
+                    task.update_progress(80, "字幕繁简转换中")
+                    simplify_result = subtitle_svc.convert_subtitles_to_simplified_in_folder(renamed_path)
+                    if simplify_result['converted_files'] > 0:
+                        logger.info(f"字幕繁简转换完成: 处理 {simplify_result['total_files']} 个文件, "
+                                   f"转换 {simplify_result['converted_files']} 个文件")
+
                 task.update_progress(85, "移动到库存")
                 final_path = await classifier.classify_and_move(renamed_path, metadata, task)
                 
@@ -1094,17 +1104,38 @@ async def resolve_conflict(conflict_id: str, action: dict):
                     source_path=conflict.new_path,
                     auto_classify=True
                 )
-                
+
                 extract_service = ExtractService()
                 filter_service = FilterService()
                 metadata_service = MetadataService()
                 classifier = SmartClassifier()
-                
+
                 extracted_path = await extract_service.extract(task)
                 if extracted_path:
-                    await filter_service.filter(extracted_path, task)
                     metadata = await metadata_service.fetch(extracted_path, task)
-                    
+
+                    # 重命名
+                    from app.core.rename_service import RenameService
+                    rename_service = RenameService()
+                    renamed_path = await rename_service.rename(extracted_path, task)
+
+                    await filter_service.filter(renamed_path, task)
+
+                    if config.rename.flatten_single_subfolder:
+                        renamed_path = rename_service._flatten_single_subfolder(renamed_path)
+
+                    if config.rename.remove_empty_folders:
+                        rename_service.remove_empty_folders(renamed_path, remove_root=False)
+
+                    # 简繁转换
+                    if hasattr(config, 'asmr_sync') and getattr(config.asmr_sync, 'simplify_chinese_enabled', False):
+                        from ..core.subtitle_sync_service import get_subtitle_sync_service
+                        subtitle_svc = get_subtitle_sync_service()
+                        simplify_result = subtitle_svc.convert_subtitles_to_simplified_in_folder(renamed_path)
+                        if simplify_result['converted_files'] > 0:
+                            logger.info(f"字幕繁简转换完成: 处理 {simplify_result['total_files']} 个文件, "
+                                       f"转换 {simplify_result['converted_files']} 个文件")
+
                     # 修改metadata使文件夹名加编号
                     rjcode = metadata.get('rjcode', '')
                     target_base = os.path.join(config.storage.library_path, conflict.rjcode)
@@ -1112,8 +1143,8 @@ async def resolve_conflict(conflict_id: str, action: dict):
                     while os.path.exists(f"{target_base}({counter})"):
                         counter += 1
                     metadata['work_name'] = f"{metadata.get('work_name', '')}({counter})"
-                    
-                    final_path = await classifier.classify_and_move(extracted_path, metadata, task)
+
+                    final_path = await classifier.classify_and_move(renamed_path, metadata, task)
                     os.remove(conflict.new_path)
                     logger.info(f"合并完成：新版本已保存为 {final_path}")
                     
