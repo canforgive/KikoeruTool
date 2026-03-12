@@ -1,150 +1,78 @@
-# Prekikoeru - DLsite 作品整理工具
+# Prekikoeru - DLsite 音声作品智能整理工具
 
-现代化的 DLsite 音声作品压缩包自动处理工具。
+现代化的 DLsite 音声作品压缩包自动处理工具，支持智能解压、元数据获取、文件分类、ASMR 同步下载等功能。
 
-## 🚀 快速开始（本地开发）
+## 功能亮点
 
-### 环境要求
+- **智能解压**: 自动识别压缩格式、修复后缀名、支持密码爆破、分卷合并
+- **元数据获取**: 自动从 DLsite 获取作品信息，支持关联作品查询
+- **智能分类**: 按社团、系列等规则自动分类到存储库
+- **ASMR 同步下载**: 扫描字幕文件夹，自动下载对应资源
+- **字幕处理**: LRC 广告清理、繁简转换
+- **重复检测**: 检测重复作品和多语言版本
+- **文件夹监视**: 自动监视文件夹，新文件自动处理
+- **Web UI**: 现代化的 Web 界面，支持实时进度查看
 
-- Python 3.11+
-- Node.js 18+
-- 7-Zip (Windows) / p7zip (Linux)
+## 快速开始
 
-### 一键启动
+### Windows 用户
 
-**Windows:**
-```cmd
-start-dev.bat
-```
+1. 从 [Releases](https://github.com/canforgive/KikoeruTool/releases) 下载最新版本
+2. 解压后双击运行 `prekikoeru.exe`
+3. 浏览器访问 http://localhost:8000
 
-**Linux/Mac:**
+### Docker 部署
+
 ```bash
-chmod +x start-dev.sh
-./start-dev.sh
+# 拉取镜像
+docker pull ghcr.io/canforgive/kikoerutool:latest
+
+# 运行
+docker run -d -p 8000:8000 \
+  -v ./data:/app/data \
+  -v ./library:/library \
+  ghcr.io/canforgive/kikoerutool:latest
 ```
 
-然后访问 http://localhost:5173
-
-### 手动启动
-
-**1. 安装依赖**
+### 本地开发
 
 ```bash
 # 后端
-cd backend
-pip install -r requirements.txt
-
-# 前端
-cd ../frontend
-npm install
-```
-
-**2. 创建测试目录**
-
-```bash
-mkdir -p test_data/input
-mkdir -p test_data/library
-mkdir -p test_data/temp
-```
-
-**3. 启动服务**
-
-终端1（后端）：
-```bash
-cd backend
+cd backend && pip install -r requirements.txt
 python -m app.main
-```
 
-终端2（前端）：
-```bash
-cd frontend
+# 前端（新终端）
+cd frontend && npm install
 npm run dev
 ```
 
-**4. 开始测试**
+## 文档
 
-- 复制压缩包到 `test_data/input/`
-- 打开 http://localhost:5173
-- 查看任务处理进度
+- [软件介绍](docs/INTRODUCTION.md) - 详细功能说明和使用指南
+- [本地开发指南](docs/LOCAL_DEV.md) - 开发环境配置
+- [构建指南](docs/BUILD.md) - 打包和发布
+- [API 文档](http://localhost:8000/docs) - 服务启动后访问
 
-## 📦 功能特性
-
-- ✅ **智能解压**: 自动检测文件类型、修复后缀名、支持密码爆破、分卷自动合并
-- ✅ **文件过滤**: 基于正则表达式的灵活过滤系统
-- ✅ **元数据获取**: 自动从 DLsite 获取作品信息并缓存
-- ✅ **智能分类**: 按社团、系列等规则自动分类到存储库
-- ✅ **重复检测**: 检测重复作品和多语言版本
-- ✅ **文件夹监视**: 自动监视文件夹，新文件自动处理
-- ✅ **Web UI**: 现代化的 Web 界面，支持实时进度查看
-
-## 🏗️ 项目结构
+## 项目结构
 
 ```
 prekikoeru/
 ├── backend/           # FastAPI 后端
+│   ├── app/
+│   │   ├── api/       # API 路由
+│   │   ├── core/      # 核心服务
+│   │   ├── models/    # 数据模型
+│   │   └── config/    # 配置管理
+│   └── requirements.txt
 ├── frontend/          # Vue3 前端
-├── config/           # 配置文件
-├── test_data/        # 测试数据（自动创建）
-├── start-dev.bat     # Windows启动脚本
-├── start-dev.sh      # Linux/Mac启动脚本
-└── docker-compose.yml # Docker配置
+│   ├── src/
+│   │   ├── views/     # 页面组件
+│   │   ├── api/       # API 封装
+│   │   └── stores/    # 状态管理
+│   └── package.json
+└── docs/              # 文档
 ```
 
-## 🧪 测试
-
-```bash
-# 创建测试数据
-./create_test_data.sh
-
-# 运行测试
-./test.sh
-
-# 详细测试文档
-docs/LOCAL_DEV.md
-docs/TESTING.md
-```
-
-## 🐳 Docker 部署
-
-```bash
-# 修改 docker-compose.yml 中的路径
-# 启动服务
-docker-compose up -d
-
-# 访问 http://localhost:8000
-```
-
-## 📖 文档
-
-- [本地开发指南](docs/LOCAL_DEV.md)
-- [测试指南](docs/TESTING.md)
-- [API文档](http://localhost:8000/docs) (服务启动后)
-
-## 📝 配置
-
-编辑 `config/config.yaml`：
-
-```yaml
-storage:
-  input_path: "./test_data/input"      # 待处理文件夹
-  temp_path: "./test_data/temp"        # 临时文件夹
-  library_path: "./test_data/library"  # 库存文件夹
-```
-
-## 🔧 故障排除
-
-**端口被占用？**
-- 后端：修改 `backend/app/main.py` 中的端口
-- 前端：修改 `frontend/vite.config.js` 中的端口
-
-**7z 未找到？**
-- Windows: 安装 7-Zip 并添加到 PATH
-- Linux: `sudo apt-get install p7zip-full`
-
-**权限错误？**
-- Windows: 以管理员身份运行
-- Linux: `chmod -R 777 test_data`
-
-## 📄 许可证
+## 许可证
 
 MIT License
