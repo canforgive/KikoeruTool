@@ -1347,9 +1347,9 @@ async def reprocess_archive(archive_id: str):
         
         # 检查是否已有处理同RJ号的现存任务
         engine = get_task_engine()
-        existing_tasks_for_rj = [t for t in engine.get_all_tasks() 
+        existing_tasks_for_rj = [t for t in engine.get_all_tasks()
                                if t.rjcode == archive.rjcode]
-        
+
         if existing_tasks_for_rj:
             # 复用已有任务
             task = existing_tasks_for_rj[0]
@@ -1359,6 +1359,8 @@ async def reprocess_archive(archive_id: str):
             task.skip_archive = True  # 标记跳过归档（因为文件已在 processed 目录）
             task.status = TaskStatus.PENDING
             task.update_progress(0, "待处理")
+            # 将任务加入队列以供 worker 执行
+            await engine.queue.put(task)
             logger.info(f"复用现有RJ号任务: {task.id}, 源路径: {original_source} -> {task.source_path}, RJ: {archive.rjcode}, 状态: {old_status} -> {task.status}")
         else:
             # 创建新任务（标记为重新处理，直接从 processed 目录解压）
