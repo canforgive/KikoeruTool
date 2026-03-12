@@ -28,13 +28,36 @@
 ```bash
 # 拉取镜像
 docker pull ghcr.io/canforgive/kikoerutool:latest
-
-# 运行
-docker run -d -p 8000:8000 \
-  -v ./data:/app/data \
-  -v ./library:/library \
-  ghcr.io/canforgive/kikoerutool:latest
 ```
+
+**docker-compose.yml 示例：**
+
+```yaml
+version: '3'
+services:
+  prekikoeru:
+    image: ghcr.io/canforgive/kikoerutool:latest
+    container_name: prekikoeru
+    ports:
+      - "8000:8000"
+    environment:
+      - PUID=1000  # 通过 'id' 命令查到的 uid
+      - PGID=1000  # 通过 'id' 命令查到的 gid
+      - CONFIG_PATH=/app/config
+      - TZ=Asia/Shanghai  # 建议设置时区，防止日志时间错乱
+    volumes:
+      - /path/to/config:/app/config    # 配置文件目录
+      - /path/to/data:/app/data        # 数据库目录
+      - /path/to/input:/input          # 待处理压缩包目录
+      - /path/to/library:/library      # 音声库存目录
+      - /path/to/temp:/temp            # 临时解压目录
+      - /path/to/processed:/processed  # 已处理压缩包目录
+      - /path/to/existing:/existing    # 已有作品目录
+      - /path/to/subtitles:/Subtitles  # ASMR同步字幕目录
+    restart: unless-stopped
+```
+
+启动后访问 http://localhost:8000
 
 ### 本地开发
 
