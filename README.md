@@ -79,3 +79,11 @@ prekikoeru/
 ## 许可证
 
 MIT License
+
+## 致谢
+
+本项目参考和借鉴了以下开源项目，感谢各位作者对社区的贡献：
+
+- [Sakyoriii/prekikoeru](https://github.com/Sakyoriii/prekikoeru) - DLsite 资源自动解压整理工具
+- [yodhcn/dlsite-doujin-renamer](https://github.com/yodhcn/dlsite-doujin-renamer) - DLsite 同人作品重命名工具
+- [Number178/kikoeru-quasar](https://github.com/Number178/kikoeru-quasar) - Kikoeru 前端项目
