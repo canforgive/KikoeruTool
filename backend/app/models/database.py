@@ -288,15 +288,56 @@ class ProcessedArchiveCleanupLog(Base):
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
+class WaitingRetryTask(Base):
+    """等待重试任务表"""
+    __tablename__ = 'waiting_retry_tasks'
+
+    id = Column(String(36), primary_key=True)
+    rjcode = Column(String(20))
+    subtitle_folder = Column(Text)
+    work_title = Column(Text)
+    retry_reason = Column(Text)
+    retry_count = Column(Integer, default=1)
+    max_retry_count = Column(Integer, default=10)
+    retry_after = Column(DateTime)  # 下次重试时间
+    task_metadata = Column(JSON)  # 其他任务元数据
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        """转换为字典"""
+        return {
+            'id': self.id,
+            'rjcode': self.rjcode,
+            'subtitle_folder': self.subtitle_folder,
+            'work_title': self.work_title,
+            'retry_reason': self.retry_reason,
+            'retry_count': self.retry_count,
+            'max_retry_count': self.max_retry_count,
+            'retry_after': self.retry_after.isoformat() if self.retry_after else None,
+            'task_metadata': self.task_metadata,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+import logging
+_db_logger = logging.getLogger(__name__)
+
 # 数据库连接
 def get_db_path():
     data_dir = os.environ.get('DATA_PATH', './data')
     os.makedirs(data_dir, exist_ok=True)
-    return os.path.join(data_dir, 'cache.db')
+    db_path = os.path.join(data_dir, 'cache.db')
+    # 转换为绝对路径
+    db_path = os.path.abspath(db_path)
+    return db_path
+
+# 获取数据库路径
+_db_path = get_db_path()
 
 # 数据库连接，确保支持UTF-8
 engine = create_engine(
-    f'sqlite:///{get_db_path()}',
+    f'sqlite:///{_db_path}',
     connect_args={
         'check_same_thread': False,
     },
@@ -306,7 +347,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
     """初始化数据库"""
+    _db_logger.info(f"[数据库] 初始化数据库，路径: {_db_path}")
     Base.metadata.create_all(bind=engine)
+    _db_logger.info(f"[数据库] 表创建完成")
 
 def get_db():
     """获取数据库会话"""
@@ -315,3 +358,7 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def get_db_path_info():
+    """获取数据库路径信息"""
+    return _db_path

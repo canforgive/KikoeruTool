@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -9,8 +9,11 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 import re
+import shutil
+import tempfile
 
 # Create logger instance
 logger = logging.getLogger(__name__)
@@ -20,6 +23,7 @@ from ..core.task_engine import TaskEngine, Task, TaskType, get_task_engine
 from ..core.watcher import get_watcher
 from ..core.password_cleanup import get_cleanup_service
 from ..core.processed_archive_cleanup import get_processed_archive_cleanup_service
+from ..core.file_processor import get_file_processor
 from ..config.settings import get_config
 
 # 初始化FastAPI应用
@@ -74,8 +78,12 @@ async def startup_event():
     archive_cleanup_service = get_processed_archive_cleanup_service()
     await archive_cleanup_service.start()
 
-    # 扫描已处理压缩包目录，同步数据库
-    await scan_processed_archives()
+    # 扫描已处理压缩包目录，同步数据库（根据配置决定是否启用）
+    config = get_config()
+    if config.processed_archive_cleanup.scan_on_startup:
+        await scan_processed_archives()
+    else:
+        logger.info("启动时扫描已处理压缩包目录已禁用")
 
 # 关闭事件
 @app.on_event("shutdown")
@@ -112,6 +120,7 @@ class TaskResponse(BaseModel):
     progress: int
     current_step: str
     error_message: Optional[str]
+    rjcode: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -128,22 +137,29 @@ class ConfigResponse(BaseModel):
     processed_archive_cleanup: Optional[dict] = None
     path_mapping: Optional[dict] = None
     kikoeru_server: Optional[dict] = None
+    asmr_sync: Optional[dict] = None
 
 # API路由
 @app.post("/api/tasks", response_model=TaskResponse)
 async def create_task(task_create: TaskCreate):
-    """创建新任务"""
-    engine = get_task_engine()
-    
-    task_type = TaskType(task_create.task_type)
-    task = Task(
-        task_type=task_type,
-        source_path=task_create.source_path,
-        auto_classify=task_create.auto_classify
+    """创建新任务（使用 FileProcessor 统一处理流程）"""
+    from ..core.file_processor import get_file_processor
+
+    file_processor = get_file_processor()
+    config = get_config()
+
+    # 使用 FileProcessor 处理文件
+    task = await file_processor.process_file(
+        task_create.source_path,
+        auto_classify=task_create.auto_classify,
+        wait_stable=False,  # 手动创建任务时不等待稳定
+        is_processed=lambda path: False,  # 允许重新处理
+        mark_processed=None
     )
-    
-    await engine.submit(task)
-    
+
+    if not task:
+        raise HTTPException(status_code=400, detail=f"无法处理文件: {task_create.source_path}")
+
     return TaskResponse(
         id=task.id,
         type=task.type.value,
@@ -152,8 +168,84 @@ async def create_task(task_create: TaskCreate):
         output_path=task.output_path,
         progress=task.progress,
         current_step=task.current_step,
-        error_message=task.error_message
+        error_message=task.error_message,
+        rjcode=task.rjcode
     )
+
+# ========== 文件上传 API ==========
+@app.post("/api/upload")
+async def upload_files(files: List[UploadFile] = File(...)):
+    """上传文件并触发扫描（复用分卷识别逻辑）"""
+    config = get_config()
+    input_path = config.storage.input_path
+
+    # 确保输入目录存在
+    os.makedirs(input_path, exist_ok=True)
+
+    uploaded_files = []
+
+    for file in files:
+        if not file.filename:
+            continue
+
+        # 保存文件到输入目录
+        file_path = os.path.join(input_path, file.filename)
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        uploaded_files.append(file_path)
+        logger.info(f"上传文件: {file.filename} -> {file_path}")
+
+    # 不再为每个文件单独创建任务
+    # 改为调用扫描逻辑，复用分卷文件识别
+    # 扫描逻辑会正确识别分卷文件，只为主文件创建任务
+    scan_result = await _scan_and_create_tasks()
+
+    return {
+        "message": f"成功上传 {len(uploaded_files)} 个文件，{scan_result['message']}",
+        "uploaded_count": len(uploaded_files),
+        "found_count": scan_result["found_count"],
+        "task_ids": scan_result["task_ids"]
+    }
+
+
+async def _scan_and_create_tasks():
+    """扫描输入目录并创建任务（使用 FileProcessor 统一处理逻辑）"""
+    config = get_config()
+    input_path = config.storage.input_path
+
+    # 自动创建目录（如果不存在）
+    if not os.path.exists(input_path):
+        try:
+            os.makedirs(input_path, exist_ok=True)
+            logger.info(f"自动创建输入目录: {input_path}")
+        except Exception as e:
+            return {"message": f"无法创建输入目录: {str(e)}", "found_count": 0, "task_ids": []}
+
+    watcher = get_watcher()
+    file_processor = get_file_processor()
+
+    # 使用 FileProcessor 统一处理目录
+    tasks = await file_processor.process_directory(
+        input_path,
+        auto_classify=config.watcher.auto_classify,
+        is_processed=lambda path: (
+            path in watcher.pending_files or
+            path in watcher._processed_files or
+            any(t.source_path == path and t.status.value in ["pending", "processing"]
+                for t in get_task_engine().get_all_tasks())
+        ),
+        mark_processed=watcher._mark_file_processed
+    )
+
+    created_task_ids = [task.id for task in tasks]
+
+    return {
+        "message": f"找到 {len(tasks)} 个待处理文件",
+        "found_count": len(tasks),
+        "task_ids": created_task_ids
+    }
 
 @app.get("/api/tasks", response_model=List[TaskResponse])
 async def get_tasks(status: Optional[str] = None):
@@ -200,7 +292,8 @@ async def get_task(task_id: str):
         output_path=task.output_path,
         progress=task.progress,
         current_step=task.current_step,
-        error_message=task.error_message
+        error_message=task.error_message,
+        rjcode=task.rjcode
     )
 
 @app.post("/api/tasks/{task_id}/pause")
@@ -239,7 +332,8 @@ async def get_configuration():
         password_cleanup=config.password_cleanup.model_dump(),
         processed_archive_cleanup=config.processed_archive_cleanup.model_dump(),
         path_mapping=config.path_mapping.model_dump(),
-        kikoeru_server=config.kikoeru_server.model_dump() if hasattr(config, 'kikoeru_server') else None
+        kikoeru_server=config.kikoeru_server.model_dump() if hasattr(config, 'kikoeru_server') else None,
+        asmr_sync=config.asmr_sync.model_dump() if hasattr(config, 'asmr_sync') else None
     )
 
 @app.post("/api/config")
@@ -318,7 +412,20 @@ async def update_configuration(request: Request):
                 # 如果验证失败，保留原始配置
         else:
             logger.info("[KIKOERU] 未接收到 Kikoeru 服务器配置")
-        
+
+        # 处理 ASMR 同步配置
+        if 'asmr_sync' in config_data:
+            logger.info(f"[ASMR] 接收到 ASMR 同步配置: {config_data['asmr_sync']}")
+            try:
+                from ..config.settings import ASMRSyncConfig
+                asmr_config = ASMRSyncConfig(**config_data['asmr_sync'])
+                config_data['asmr_sync'] = asmr_config.model_dump()
+                logger.info(f"[ASMR] 配置验证通过: retry_cron={asmr_config.retry_cron}")
+            except Exception as e:
+                logger.error(f"[ASMR] ASMR 同步配置验证失败: {e}")
+        else:
+            logger.info("[ASMR] 未接收到 ASMR 同步配置")
+
         result = save_config(config_data)
         logger.info(f"配置已保存，分类规则数: {len(config_data.get('classification', []))}")
 
@@ -373,77 +480,11 @@ async def get_watcher_status():
 @app.post("/api/scan")
 async def scan_input_directory():
     """手动扫描输入目录"""
-    import os
-    from ..core.watcher import get_watcher
-    from ..core.task_engine import Task, TaskType, get_task_engine
-    
-    config = get_config()
-    input_path = config.storage.input_path
-    
-    # 自动创建目录（如果不存在）
-    if not os.path.exists(input_path):
-        try:
-            os.makedirs(input_path, exist_ok=True)
-            logging.info(f"自动创建输入目录: {input_path}")
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"无法创建输入目录: {str(e)}")
-    
-    found_files = []
-    watcher = get_watcher()
-    engine = get_task_engine()
-    
-    # 扫描目录
-    for root, dirs, files in os.walk(input_path):
-        for file in files:
-            file_path = os.path.join(root, file)
-            
-            # 使用与监视器相同的逻辑检查文件
-            is_archive = False
-            if watcher.handler:
-                is_archive = watcher.handler._is_archive(file_path)
-            else:
-                # 如果没有 handler，使用基本检查逻辑（包含魔数检测）
-                from pathlib import Path as PathLib
-                from ..core.watcher import ArchiveHandler
-                
-                # 创建临时 handler 来检测文件
-                temp_handler = ArchiveHandler(lambda x: None)
-                is_archive = temp_handler._is_archive(file_path)
-            
-            if is_archive:
-                # 检查文件大小（跳过正在复制中的小文件）
-                try:
-                    file_size = os.path.getsize(file_path)
-                    if file_size < 1024:  # 小于1KB，可能正在复制中
-                        logger.warning(f"文件太小，可能正在复制中，跳过: {file_path} ({file_size} bytes)")
-                        continue
-                except OSError:
-                    continue
-                
-                # 检查是否已在处理队列中
-                existing = any(
-                    t.source_path == file_path and t.status.value in ["pending", "processing"]
-                    for t in engine.get_all_tasks()
-                )
-                
-                if not existing and file_path not in watcher.pending_files and file_path not in watcher._processed_files:
-                    found_files.append(file_path)
-    
-    # 为每个找到的文件创建任务
-    created_tasks = []
-    for file_path in found_files:
-        task = Task(
-            task_type=TaskType.AUTO_PROCESS,
-            source_path=file_path,
-            auto_classify=config.watcher.auto_classify
-        )
-        await engine.submit(task)
-        created_tasks.append(task.id)
-    
+    result = await _scan_and_create_tasks()
     return {
-        "message": f"扫描完成，找到 {len(found_files)} 个文件",
-        "found_count": len(found_files),
-        "task_ids": created_tasks
+        "message": f"扫描完成，找到 {result['found_count']} 个文件",
+        "found_count": result["found_count"],
+        "task_ids": result["task_ids"]
     }
 
 # 健康检查
@@ -841,7 +882,7 @@ async def resolve_conflict(conflict_id: str, action: dict):
     from ..core.filter_service import FilterService
     from ..core.metadata_service import MetadataService
     from ..core.classifier import SmartClassifier
-    from ..core.task_engine import Task, TaskType
+    from ..core.task_engine import Task, TaskType, TaskStatus, get_task_engine
     import shutil
     import re
     
@@ -856,32 +897,111 @@ async def resolve_conflict(conflict_id: str, action: dict):
         
         # 检查new_path是否是压缩包（预检阶段的冲突）
         from ..core.watcher import ArchiveHandler
-        temp_handler = ArchiveHandler(lambda x: None)
+        temp_handler = ArchiveHandler(lambda x: None, lambda: set(), lambda: False, lambda x: None)
         is_archive = temp_handler._is_archive(conflict.new_path)
         
         if action_type == "KEEP_NEW":
-            # 删除旧版本
             if os.path.exists(conflict.existing_path):
                 shutil.rmtree(conflict.existing_path)
             
             if is_archive:
-                # 如果是压缩包，需要先解压
                 logger.info(f"保留新版：先解压压缩包 {conflict.new_path}")
                 
-                # 检查文件是否已经在 processed 目录中（重新解压的情况）
                 is_in_processed = conflict.new_path.startswith(config.storage.processed_archives_path)
                 if is_in_processed:
                     logger.info(f"检测到文件已在 processed 目录中，设置 skip_archive=True: {conflict.new_path}")
                 
-                # 创建临时任务用于解压
-                task = Task(
-                    task_type=TaskType.AUTO_PROCESS,
-                    source_path=conflict.new_path,
-                    auto_classify=True,
-                    skip_archive=is_in_processed  # 如果在 processed 目录中，跳过归档
-                )
+                # 检查冲突前先确认没有正在执行同RJ编号的操作
+                engine = get_task_engine()
+                rjcode_of_new_path = engine._extract_rjcode(str(conflict.new_path)) 
                 
-                # 解压
+                skip_archive_bool = bool(conflict.new_path.startswith(config.storage.processed_archives_path)) 
+                
+                # 如果正在处理同样的RJ号，优先复用正在处理的同RJ号的任务
+                if rjcode_of_new_path and engine.is_rjcode_processing(rjcode_of_new_path):
+                    # 查找正在处理同RJ号的任务
+                    existing_tasks_for_rj = [t for t in engine.get_all_tasks() 
+                                           if t.rjcode == rjcode_of_new_path and t.status == TaskStatus.PROCESSING]
+                    if existing_tasks_for_rj:
+                        task = existing_tasks_for_rj[0]
+                        # 复用当前正在处理的同RJ号任务
+                        original_source = task.source_path
+                        task.source_path = str(conflict.new_path)
+                        task.skip_archive = skip_archive_bool
+                        # 确保任务状态为PROCESSED，以便继续执行
+                        task.status = TaskStatus.PROCESSING
+                        task.update_progress(10, "解压中")
+                        logger.info(f"复用现有RJ号任务: {task.id}, 源路径: {original_source} -> {task.source_path}, RJ: {rjcode_of_new_path}")
+                    else:
+                        # 使用原有的冲突task_id逻辑
+                        original_task = engine.get_task(str(conflict.task_id)) if conflict.task_id else None
+                        
+                        if original_task:
+                            # 更新原有任务的源路径，复用任务ID
+                            original_source = original_task.source_path
+                            original_task.source_path = str(conflict.new_path)
+                            original_task.skip_archive = skip_archive_bool
+                            original_task.status = TaskStatus.PROCESSING
+                            original_task.update_progress(10, "解压中")
+                            task = original_task
+                            logger.info(f"复用原有任务继续处理: {conflict.task_id}, 源路径: {original_source} -> {original_task.source_path}")
+                        else:
+                            task = Task(
+                                task_type=TaskType.AUTO_PROCESS,
+                                source_path=str(conflict.new_path),
+                                auto_classify=True,
+                                skip_archive=skip_archive_bool
+                            )
+                            engine.tasks[task.id] = task
+                            logger.info(f"创建新任务处理: {task.id}")
+                else:
+                    # 没有正在处理的同RJ任务时，使用原有的逻辑
+                    original_task = engine.get_task(str(conflict.task_id)) if conflict.task_id else None
+
+                    if original_task:
+                        # 更新原有任务的源路径，复用任务ID
+                        original_source = original_task.source_path
+                        original_task.source_path = str(conflict.new_path)
+                        original_task.skip_archive = skip_archive_bool
+                        original_task.status = TaskStatus.PROCESSING
+                        original_task.update_progress(10, "解压中")
+                        task = original_task
+                        logger.info(f"复用原有任务继续处理: {conflict.task_id}, 源路径: {original_source} -> {original_task.source_path}")
+                    else:
+                        # 检查是否有其他同RJ号的任务存在，如果有就复用
+                        rjcode_of_new_path = engine._extract_rjcode(str(conflict.new_path))
+                        if rjcode_of_new_path:
+                            existing_rj_tasks = [t for t in engine.get_all_tasks() 
+                                               if t.rjcode == rjcode_of_new_path]
+                            if existing_rj_tasks:
+                                task = existing_rj_tasks[0]
+                                original_source = task.source_path
+                                task.source_path = str(conflict.new_path)
+                                task.skip_archive = skip_archive_bool
+                                task.status = TaskStatus.PROCESSING
+                                task.update_progress(10, "解压中")
+                                logger.info(f"复用同RJ号任务: {task.id}, 源路径: {original_source} -> {task.source_path}, RJ: {rjcode_of_new_path}")
+                            else:
+                                # 创建新任务
+                                task = Task(
+                                    task_type=TaskType.AUTO_PROCESS,
+                                    source_path=str(conflict.new_path),
+                                    auto_classify=True,
+                                    skip_archive=skip_archive_bool
+                                )
+                                engine.tasks[task.id] = task
+                                logger.info(f"创建新任务处理: {task.id}")
+                        else:
+                            # 创建新任务
+                            task = Task(
+                                task_type=TaskType.AUTO_PROCESS,
+                                source_path=str(conflict.new_path),
+                                auto_classify=True,
+                                skip_archive=skip_archive_bool
+                            )
+                            engine.tasks[task.id] = task
+                            logger.info(f"创建新任务处理: {task.id}")
+                
                 extract_service = ExtractService()
                 filter_service = FilterService()
                 metadata_service = MetadataService()
@@ -889,39 +1009,38 @@ async def resolve_conflict(conflict_id: str, action: dict):
                 
                 extracted_path = await extract_service.extract(task)
                 if not extracted_path:
-                    # 解压失败（通常是密码错误），任务状态已被设置为 failed
                     error_msg = task.error_message or "解压失败"
                     logger.error(f"处理冲突失败: {error_msg}")
                     return {"success": False, "error": error_msg}
                 
-                # 获取元数据
                 metadata = await metadata_service.fetch(extracted_path, task)
-                task.task_metadata = metadata  # 设置元数据到任务对象
+                task.task_metadata = metadata
                 
-                # 重命名文件夹
+                task.update_progress(60, "重命名文件夹")
                 from app.core.rename_service import RenameService
                 rename_service = RenameService()
                 renamed_path = await rename_service.rename(extracted_path, task)
                 
-                # 过滤（在重命名后的文件夹上进行）
+                task.update_progress(75, "过滤文件中")
                 await filter_service.filter(renamed_path, task)
                 
-                # 扁平化单层文件夹（在过滤之后，移动之前）
                 if config.rename.flatten_single_subfolder:
                     renamed_path = rename_service._flatten_single_subfolder(renamed_path)
                     logger.info(f"保留新版 - 扁平化后路径: {renamed_path}")
 
-                # 移除空文件夹（在扁平化之后）
                 if config.rename.remove_empty_folders:
                     rename_service.remove_empty_folders(renamed_path, remove_root=False)
 
-                # 移动到正确位置
+                task.update_progress(85, "移动到库存")
                 final_path = await classifier.classify_and_move(renamed_path, metadata, task)
                 
-                # 归档压缩包到 processed 目录（不要删除，以便将来重新处理）
                 from app.core.task_engine import TaskEngine
-                engine = TaskEngine()
-                await engine._archive_source_file(task)
+                task_engine = TaskEngine()
+                await task_engine._archive_source_file(task)
+                
+                task.status = TaskStatus.COMPLETED
+                task.update_progress(100, f"问题作品已处理: {action_type}")
+                task.completed_at = datetime.utcnow()
                 
                 logger.info(f"保留新版完成：已解压并移动到 {final_path}，压缩包已归档")
                 
@@ -1226,15 +1345,31 @@ async def reprocess_archive(archive_id: str):
         # 直接从 processed 目录解压，避免复制到 SSD
         logger.info(f"直接从 processed 目录重新解压: {archive.current_path}")
         
-        # 创建新任务（标记为重新处理，直接从 processed 目录解压）
+        # 检查是否已有处理同RJ号的现存任务
         engine = get_task_engine()
-        task = Task(
-            task_type=TaskType.AUTO_PROCESS,
-            source_path=archive.current_path,  # 直接使用 processed 目录中的文件
-            auto_classify=get_config().watcher.auto_classify,
-            skip_archive=True  # 标记跳过归档（因为文件已在 processed 目录）
-        )
-        await engine.submit(task)
+        existing_tasks_for_rj = [t for t in engine.get_all_tasks() 
+                               if t.rjcode == archive.rjcode]
+        
+        if existing_tasks_for_rj:
+            # 复用已有任务
+            task = existing_tasks_for_rj[0]
+            original_source = task.source_path
+            old_status = task.status
+            task.source_path = archive.current_path
+            task.skip_archive = True  # 标记跳过归档（因为文件已在 processed 目录）
+            task.status = TaskStatus.PENDING
+            task.update_progress(0, "待处理")
+            logger.info(f"复用现有RJ号任务: {task.id}, 源路径: {original_source} -> {task.source_path}, RJ: {archive.rjcode}, 状态: {old_status} -> {task.status}")
+        else:
+            # 创建新任务（标记为重新处理，直接从 processed 目录解压）
+            task = Task(
+                task_type=TaskType.AUTO_PROCESS,
+                source_path=archive.current_path,  # 直接使用 processed 目录中的文件
+                auto_classify=get_config().watcher.auto_classify,
+                skip_archive=True  # 标记跳过归档（因为文件已在 processed 目录）
+            )
+            await engine.submit(task)
+            # 注意：submit 会自动添加 task 到 engine.tasks 和队列中
         
         # 更新记录状态和重新处理时间
         archive.status = 'reprocessing'
@@ -2741,7 +2876,10 @@ class KikoeruServerConfig(BaseModel):
     """Kikoeru 服务器配置模型"""
     enabled: bool = False
     server_url: str = ""
+    username: str = ""
+    password: str = ""
     api_token: str = ""
+    token_expires: int = 0
     timeout: int = 10
     cache_ttl: int = 300
 
@@ -2750,23 +2888,27 @@ async def get_kikoeru_server_config():
     """获取 Kikoeru 服务器查重配置"""
     try:
         config = get_config()
-        # 直接访问 Pydantic 模型的属性
         kikoeru_config = config.kikoeru_server if hasattr(config, 'kikoeru_server') else None
         
         if kikoeru_config:
             return {
                 "enabled": kikoeru_config.enabled,
                 "server_url": kikoeru_config.server_url,
-                "api_token": kikoeru_config.api_token,  # 注意：生产环境可能需要隐藏
+                "username": kikoeru_config.username,
+                "password": kikoeru_config.password,
+                "api_token": kikoeru_config.api_token,
+                "token_expires": kikoeru_config.token_expires,
                 "timeout": kikoeru_config.timeout,
                 "cache_ttl": kikoeru_config.cache_ttl
             }
         else:
-            # 返回默认配置
             return {
                 "enabled": False,
                 "server_url": "",
+                "username": "",
+                "password": "",
                 "api_token": "",
+                "token_expires": 0,
                 "timeout": 10,
                 "cache_ttl": 300
             }
@@ -2780,21 +2922,21 @@ async def update_kikoeru_server_config(config: KikoeruServerConfig):
     try:
         from ..config.settings import save_config
         
-        # 只更新 kikoeru_server 部分配置
         config_to_save = {
             'kikoeru_server': {
                 'enabled': config.enabled,
                 'server_url': config.server_url.rstrip('/'),
+                'username': config.username,
+                'password': config.password,
                 'api_token': config.api_token,
+                'token_expires': config.token_expires,
                 'timeout': config.timeout,
                 'cache_ttl': config.cache_ttl
             }
         }
         
-        # 保存配置
         save_config(config_to_save)
         
-        # 重新加载服务配置
         service = get_kikoeru_service()
         service.config = service._load_config()
         
@@ -2910,32 +3052,441 @@ async def clear_kikoeru_cache():
     try:
         service = get_kikoeru_service()
         service.clear_cache()
-        
+
         return {"message": "Kikoeru 查重缓存已清除"}
     except Exception as e:
         logger.error(f"清除 Kikoeru 缓存失败: {e}")
         raise HTTPException(status_code=500, detail=f"清除缓存失败: {str(e)}")
 
 
+# ========== ASMR 同步下载 API ==========
+
+class ASMRSyncScanRequest(BaseModel):
+    """ASMR 同步扫描请求"""
+    folder_path: str
+
+class ASMRSyncStartRequest(BaseModel):
+    """ASMR 同步开始请求"""
+    items: List[dict]  # [{rjcode, subtitle_folder, work_title}]
+    auto_classify: bool = True
+
+@app.post("/api/asmr-sync/scan")
+async def asmr_sync_scan(request: ASMRSyncScanRequest):
+    """扫描指定文件夹，返回发现的 RJ 号和字幕文件列表"""
+    from ..core.subtitle_sync_service import get_subtitle_sync_service
+
+    try:
+        folder_path = request.folder_path
+
+        if not os.path.exists(folder_path):
+            raise HTTPException(status_code=400, detail="指定的文件夹不存在")
+
+        if not os.path.isdir(folder_path):
+            raise HTTPException(status_code=400, detail="指定的路径不是文件夹")
+
+        subtitle_service = get_subtitle_sync_service()
+        results = subtitle_service.scan_subtitle_folders(folder_path)
+
+        return {
+            "success": True,
+            "folder_path": folder_path,
+            "total_found": len(results),
+            "items": results
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"扫描字幕文件夹失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"扫描失败: {str(e)}")
+
+
+@app.post("/api/asmr-sync/preview")
+async def asmr_sync_preview(request: Request):
+    """预览下载任务（获取文件列表、预估下载量、搜索最佳版本）"""
+    from ..core.asmr_download_service import get_asmr_download_service
+
+    try:
+        data = await request.json()
+        rjcode = data.get("rjcode")
+
+        if not rjcode:
+            raise HTTPException(status_code=400, detail="RJ号不能为空")
+
+        asmr_service = get_asmr_download_service()
+
+        # 获取所有关联版本
+        linked_works = await asmr_service.get_linked_works_from_dlsite(rjcode)
+        available_versions = []
+
+        for work in linked_works:
+            work_info = await asmr_service.fetch_work_info(work.workno)
+            tracks = await asmr_service.fetch_track_list(work.workno) if work_info else None
+
+            available_versions.append({
+                "rjcode": work.workno,
+                "lang": work.lang,
+                "priority": work.priority,
+                "available": work_info is not None and tracks is not None and len(tracks) > 0,
+                "title": work_info.get('title', '') if work_info else '',
+                "file_count": len(tracks) if tracks else 0
+            })
+
+            # 添加延迟避免请求过快
+            await asyncio.sleep(0.3)
+
+        # 找到最佳可用版本
+        actual_rjcode, work_info = await asmr_service.find_best_available_work(rjcode)
+
+        if not work_info:
+            return {
+                "success": False,
+                "rjcode": rjcode,
+                "error": "在 asmr.one 上未找到该作品的任何版本",
+                "tried_versions": [
+                    {"rjcode": v["rjcode"], "lang": v["lang"]}
+                    for v in available_versions
+                ]
+            }
+
+        # 获取文件列表
+        tracks = await asmr_service.fetch_track_list(actual_rjcode)
+        if tracks is None:
+            return {
+                "success": False,
+                "rjcode": rjcode,
+                "actual_rjcode": actual_rjcode,
+                "error": "无法获取文件列表"
+            }
+
+        # 扁平化文件列表
+        all_files = asmr_service._flatten_tracks(tracks)
+
+        # 应用筛选规则
+        config = get_config()
+        filter_rules = config.filter.rules
+        filtered_files = asmr_service.filter_files(all_files, filter_rules) if filter_rules else all_files
+
+        # 计算总大小
+        total_size = sum(f.get('size', 0) for f in filtered_files)
+
+        # 获取实际版本的语言
+        actual_version = next((v for v in available_versions if v["rjcode"] == actual_rjcode), {})
+
+        return {
+            "success": True,
+            "rjcode": rjcode,
+            "actual_rjcode": actual_rjcode,
+            "title": work_info.get('title', '未知标题'),
+            "lang": actual_version.get("lang", "JPN"),
+            "total_files": len(all_files),
+            "filtered_files": len(filtered_files),
+            "total_size": total_size,
+            "available_versions": available_versions,
+            "files": [
+                {
+                    "title": f.get('title'),
+                    "size": f.get('size', 0),
+                    "type": f.get('type')
+                }
+                for f in filtered_files[:50]  # 只返回前50个用于预览
+            ]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"预览下载任务失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"预览失败: {str(e)}")
+
+
+@app.post("/api/asmr-sync/start")
+async def asmr_sync_start(request: ASMRSyncStartRequest):
+    """开始同步下载任务"""
+    from ..core.task_engine import Task, TaskType, get_task_engine
+
+    try:
+        items = request.items
+        auto_classify = request.auto_classify
+
+        if not items:
+            raise HTTPException(status_code=400, detail="没有要下载的作品")
+
+        engine = get_task_engine()
+        created_tasks = []
+
+        for item in items:
+            rjcode = item.get("rjcode")
+            subtitle_folder = item.get("subtitle_folder")
+            work_title = item.get("work_title", "")
+
+            if not rjcode or not subtitle_folder:
+                continue
+
+            # 创建任务
+            task = Task(
+                task_type=TaskType.ASMR_SYNC_DOWNLOAD,
+                source_path=subtitle_folder,
+                auto_classify=auto_classify,
+                metadata={
+                    "rjcode": rjcode,
+                    "subtitle_folder": subtitle_folder,
+                    "work_title": work_title
+                }
+            )
+
+            await engine.submit(task)
+            created_tasks.append({
+                "task_id": task.id,
+                "rjcode": rjcode,
+                "work_title": work_title
+            })
+
+        return {
+            "success": True,
+            "message": f"已创建 {len(created_tasks)} 个下载任务",
+            "tasks": created_tasks
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"开始同步下载失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"启动失败: {str(e)}")
+
+
+@app.get("/api/asmr-sync/status")
+async def asmr_sync_status():
+    """获取当前同步任务状态"""
+    from ..core.task_engine import TaskType, get_task_engine
+
+    try:
+        engine = get_task_engine()
+        all_tasks = engine.get_all_tasks()
+
+        # 过滤出 ASMR 同步任务
+        asmr_tasks = [t for t in all_tasks if t.type == TaskType.ASMR_SYNC_DOWNLOAD]
+
+        return {
+            "total_tasks": len(asmr_tasks),
+            "processing": len([t for t in asmr_tasks if t.status.value == "processing"]),
+            "pending": len([t for t in asmr_tasks if t.status.value == "pending"]),
+            "completed": len([t for t in asmr_tasks if t.status.value == "completed"]),
+            "failed": len([t for t in asmr_tasks if t.status.value == "failed"]),
+            "waiting_retry": len([t for t in asmr_tasks if t.status.value == "waiting_retry"]),
+            "tasks": [
+                {
+                    "id": t.id,
+                    "rjcode": t.task_metadata.get("rjcode", ""),
+                    "actual_rjcode": t.task_metadata.get("actual_rjcode", ""),
+                    "work_title": t.task_metadata.get("work_title", ""),
+                    "status": t.status.value,
+                    "progress": t.progress,
+                    "current_step": t.current_step,
+                    "error_message": t.error_message,
+                    "download_files": t.task_metadata.get("download_files", []),
+                    "failed_files": t.task_metadata.get("failed_files", []),
+                    "sync_result": t.task_metadata.get("sync_result", {}),
+                    "subtitle_moved_to": t.task_metadata.get("subtitle_moved_to", ""),
+                    "task_metadata": {
+                        "retry_reason": t.task_metadata.get("retry_reason", ""),
+                        "retry_count": t.task_metadata.get("retry_count", 0),
+                        "retry_after": t.task_metadata.get("retry_after", "")
+                    }
+                }
+                for t in asmr_tasks[:20]  # 只返回最近20个
+            ]
+        }
+
+    except Exception as e:
+        logger.error(f"获取同步状态失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取状态失败: {str(e)}")
+
+
+@app.get("/api/asmr-sync/waiting-retry")
+async def asmr_sync_waiting_retry():
+    """获取等待重试的任务列表及下次重试时间"""
+    from ..core.task_engine import get_task_engine, TaskType
+    from ..config.settings import get_config
+    from datetime import datetime
+
+    try:
+        engine = get_task_engine()
+        config = get_config()
+
+        # 获取 cron 表达式
+        cron_expr = "0 */1 * * *"  # 默认值
+        if hasattr(config, 'asmr_sync') and config.asmr_sync:
+            if hasattr(config.asmr_sync, 'retry_cron'):
+                cron_expr = config.asmr_sync.retry_cron
+
+        # 计算下次重试时间
+        try:
+            from croniter import croniter
+            now = datetime.utcnow()
+            cron = croniter(cron_expr, now)
+            next_retry_time = cron.get_next(datetime)
+        except Exception as cron_err:
+            logger.warning(f"解析cron表达式失败: {cron_err}, 使用默认值")
+            next_retry_time = datetime.utcnow()
+
+        # 从数据库获取等待重试任务
+        try:
+            waiting_tasks = engine.get_waiting_retry_tasks_from_db()
+        except Exception as db_err:
+            logger.error(f"获取等待重试任务失败: {db_err}", exc_info=True)
+            waiting_tasks = []
+
+        return {
+            "cron_expression": cron_expr,
+            "next_retry_time": next_retry_time.isoformat(),
+            "tasks": waiting_tasks
+        }
+
+    except Exception as e:
+        logger.error(f"获取等待重试任务失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+
+@app.post("/api/asmr-sync/task/{task_id}/pause")
+async def asmr_sync_pause_task(task_id: str):
+    """暂停任务"""
+    from ..core.task_engine import get_task_engine
+
+    try:
+        engine = get_task_engine()
+        task = engine.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        task.pause()
+        return {"success": True, "message": "任务已暂停"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"暂停任务失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"暂停失败: {str(e)}")
+
+
+@app.post("/api/asmr-sync/task/{task_id}/resume")
+async def asmr_sync_resume_task(task_id: str):
+    """恢复任务"""
+    from ..core.task_engine import get_task_engine
+
+    try:
+        engine = get_task_engine()
+        task = engine.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        task.resume()
+        return {"success": True, "message": "任务已恢复"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"恢复任务失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"恢复失败: {str(e)}")
+
+
+@app.post("/api/asmr-sync/task/{task_id}/retry")
+async def asmr_sync_retry_failed(task_id: str):
+    """重试失败的文件"""
+    from ..core.task_engine import get_task_engine
+
+    try:
+        engine = get_task_engine()
+        task = engine.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        failed_files = task.task_metadata.get('failed_files', [])
+        if not failed_files:
+            return {"success": True, "message": "没有失败的文件需要重试"}
+
+        # 清除失败文件列表，重新触发下载
+        task.task_metadata['retry_failed'] = True
+        task.resume()
+
+        return {"success": True, "message": f"正在重试 {len(failed_files)} 个失败文件"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重试失败文件失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"重试失败: {str(e)}")
+
+
+@app.post("/api/asmr-sync/task/{task_id}/retry-waiting")
+async def asmr_sync_retry_waiting_task(task_id: str):
+    """手动重试等待中的任务（未找到版本的任务）"""
+    from ..core.task_engine import get_task_engine
+
+    try:
+        engine = get_task_engine()
+        if engine.retry_task(task_id):
+            return {"success": True, "message": "任务已加入重试队列"}
+        else:
+            raise HTTPException(status_code=400, detail="任务不在等待重试状态")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重试任务失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"重试失败: {str(e)}")
+
+
+@app.delete("/api/asmr-sync/task/{task_id}/waiting-retry")
+async def asmr_sync_delete_waiting_retry_task(task_id: str):
+    """删除等待重试的任务"""
+    from ..core.task_engine import get_task_engine
+
+    try:
+        engine = get_task_engine()
+
+        # 从内存中删除任务
+        if task_id in engine.tasks:
+            task = engine.tasks[task_id]
+            rjcode = task.rjcode
+            del engine.tasks[task_id]
+            logger.info(f"[等待重试] 从内存中删除任务: {task_id}")
+
+            # 从数据库中删除
+            engine._remove_waiting_retry_task(rjcode)
+
+            return {"success": True, "message": "任务已删除"}
+        else:
+            # 任务不在内存中，尝试从数据库删除
+            engine._remove_waiting_retry_task_by_id(task_id)
+            return {"success": True, "message": "任务已从数据库删除"}
+
+    except Exception as e:
+        logger.error(f"删除任务失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
+
+
 # 静态文件服务（前端）
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-# 如果前端构建文件存在，则提供静态文件服务
-# 优先使用环境变量指定的路径，否则使用默认路径
-static_files_path = os.environ.get('STATIC_FILES_PATH', os.path.join(os.path.dirname(__file__), "../static"))
-frontend_path = os.environ.get('FRONTEND_PATH', os.path.join(os.path.dirname(__file__), "../frontend/dist"))
+def get_base_path():
+    if getattr(sys, 'frozen', False):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 检查多个可能的前端路径
+_base_path = get_base_path()
+
+static_files_path = os.environ.get('STATIC_FILES_PATH', os.path.join(_base_path, "static"))
+frontend_path = os.environ.get('FRONTEND_PATH', os.path.join(_base_path, "frontend", "dist"))
+
 possible_paths = [
-    static_files_path,
     frontend_path,
+    static_files_path,
+    os.path.join(_base_path, "frontend", "dist"),
     os.path.join(os.path.dirname(__file__), "../frontend/dist"),
     "/app/static",
 ]
 
 frontend_build_path = None
 logger.info(f"检查静态文件路径，当前工作目录: {os.getcwd()}")
+logger.info(f"基础路径: {_base_path}")
 for path in possible_paths:
     index_file = os.path.join(path, "index.html")
     path_exists = os.path.exists(path)

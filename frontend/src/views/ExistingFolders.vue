@@ -379,7 +379,7 @@ import { ref, computed, onMounted } from 'vue'
 import { Refresh, RefreshRight, Search, Folder, VideoPlay, Warning, Check, InfoFilled, Loading, Clock, Delete } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
-import axios from 'axios'
+import { existingFolderApi } from '../api'
 
 const router = useRouter()
 
@@ -503,11 +503,9 @@ async function refreshForce() {
       }
     )
     
-    // 先刷新缓存标记
-    await axios.post('/api/existing-folders/refresh-cache')
+    await existingFolderApi.refreshCache()
     ElMessage.success('已标记缓存需要刷新')
     
-    // 强制刷新
     await refreshFoldersWithOptions(true)
   } catch (error) {
     if (error === 'cancel' || error?.message === 'cancel') {
@@ -617,19 +615,17 @@ async function handleProcess() {
   
   processing.value = true
   try {
-    const response = await axios.post('/api/existing-folders/process', {
-      folders: selectedFolders.value.map(f => f.path),
-      auto_classify: autoClassify.value
-    })
+    const data = await existingFolderApi.process(
+      selectedFolders.value.map(f => f.path),
+      autoClassify.value
+    )
     
     resultData.value = {
       success: true,
-      message: response.data.message,
-      tasks: response.data.tasks || []
+      message: data.message,
+      tasks: data.tasks || []
     }
     resultDialogVisible.value = true
-    
-    // 清空选择
     selectedFolders.value = []
     
   } catch (error) {
@@ -666,13 +662,26 @@ function formatFileSize(bytes) {
 
 function formatDate(dateStr) {
   if (!dateStr) return '-'
-  const date = new Date(dateStr)
+  // 处理不同的日期格式
+  let date
+  if (typeof dateStr === 'string') {
+    if (dateStr.includes('T')) {
+      // 如果是ISO 8601格式，它是UTC时间，添加'Z'以正确解析为本地时间
+      date = new Date(dateStr + 'Z')
+    } else {
+      date = new Date(dateStr)
+    }
+  } else {
+    date = new Date(dateStr)
+  }
   return date.toLocaleString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
   })
 }
 
@@ -697,13 +706,12 @@ async function checkSelectedDuplicates() {
   
   checkingDuplicates.value = true
   try {
-    const response = await axios.post('/api/existing-folders/check-duplicates', {
-      folders: selectedFolders.value.map(f => f.path),
-      check_linked_works: true
-    })
+    const data = await existingFolderApi.checkDuplicates(
+      selectedFolders.value.map(f => f.path),
+      { checkLinkedWorks: true }
+    )
     
-    // 更新文件夹的查重信息
-    response.data.results.forEach(result => {
+    data.results.forEach(result => {
       const folder = folders.value.find(f => f.path === result.folder_path)
       if (folder) {
         if (result.error) {
@@ -722,13 +730,12 @@ async function checkSelectedDuplicates() {
       }
     })
     
-    // 更新冲突计数
     conflictCount.value = folders.value.filter(f => 
       f.duplicate_info && f.duplicate_info.is_duplicate
     ).length
     
-    if (response.data.duplicate_count > 0) {
-      ElMessage.warning(`发现 ${response.data.duplicate_count} 个冲突`)
+    if (data.duplicate_count > 0) {
+      ElMessage.warning(`发现 ${data.duplicate_count} 个冲突`)
     } else {
       ElMessage.success('未发现冲突')
     }
@@ -765,7 +772,6 @@ async function handleProcessWithResolution() {
   
   const selectedOption = duplicateDetailData.value?.resolution_options?.find(o => o.action === selectedResolution.value)
   
-  // 如果是抛弃新版，直接删除文件夹
   if (selectedResolution.value === 'SKIP') {
     try {
       await ElMessageBox.confirm(
@@ -778,15 +784,10 @@ async function handleProcessWithResolution() {
         }
       )
       
-      // 调用后端删除接口
-      await axios.post('/api/existing-folders/delete', {
-        path: currentConflictFolder.value?.path
-      })
+      await existingFolderApi.delete(currentConflictFolder.value?.path)
       
       ElMessage.success('已删除新版文件夹')
       duplicateDetailVisible.value = false
-      
-      // 刷新列表
       await refreshFolders()
     } catch (error) {
       if (error !== 'cancel') {
@@ -797,7 +798,6 @@ async function handleProcessWithResolution() {
     return
   }
   
-  // 其他操作：保留新版/保留旧版/保留两者/合并
   try {
     await ElMessageBox.confirm(
       `确定要执行"${selectedOption?.label}"操作吗？`,
@@ -809,17 +809,14 @@ async function handleProcessWithResolution() {
       }
     )
     
-    // 调用处理接口，传入解决方案
-    const response = await axios.post('/api/existing-folders/process-with-resolution', {
-      folder_path: currentConflictFolder.value?.path,
-      resolution: selectedResolution.value,
-      auto_classify: autoClassify.value
-    })
+    const data = await existingFolderApi.processWithResolution(
+      currentConflictFolder.value?.path,
+      selectedResolution.value,
+      autoClassify.value
+    )
     
-    ElMessage.success(response.data.message || '操作成功')
+    ElMessage.success(data.message || '操作成功')
     duplicateDetailVisible.value = false
-    
-    // 刷新列表
     await refreshFolders()
   } catch (error) {
     if (error !== 'cancel') {
@@ -829,7 +826,6 @@ async function handleProcessWithResolution() {
   }
 }
 
-// 删除无冲突的文件夹
 async function handleDeleteFolder(row) {
   try {
     await ElMessageBox.confirm(
@@ -842,14 +838,9 @@ async function handleDeleteFolder(row) {
       }
     )
     
-    // 调用后端删除接口
-    await axios.post('/api/existing-folders/delete', {
-      path: row.path
-    })
+    await existingFolderApi.delete(row.path)
     
     ElMessage.success('文件夹已删除')
-    
-    // 刷新列表
     await refreshFolders()
   } catch (error) {
     if (error !== 'cancel') {
@@ -859,24 +850,16 @@ async function handleDeleteFolder(row) {
   }
 }
 
-// 强制刷新单个文件夹的查重状态
 async function handleRefreshFolder(row) {
   try {
-    // 找到文件夹在列表中的索引
     const index = folders.value.findIndex(f => f.path === row.path)
     if (index === -1) return
     
-    // 设置状态为检查中
     folders.value[index].status = 'checking'
     
-    // 调用查重接口
-    const response = await axios.post('/api/existing-folders/check-duplicates', {
-      folders: [row.path],
-      check_linked_works: true
-    })
+    const data = await existingFolderApi.checkDuplicates([row.path], { checkLinkedWorks: true })
     
-    // 更新查重信息
-    const result = response.data.results[0]
+    const result = data.results[0]
     if (result) {
       if (result.error) {
         folders.value[index].duplicate_info = { error: result.error }
@@ -893,7 +876,6 @@ async function handleRefreshFolder(row) {
       }
       folders.value[index].status = 'checked'
       
-      // 更新冲突计数
       conflictCount.value = folders.value.filter(f => 
         f.duplicate_info && f.duplicate_info.is_duplicate
       ).length
@@ -907,7 +889,6 @@ async function handleRefreshFolder(row) {
   } catch (error) {
     console.error('刷新失败:', error)
     ElMessage.error('刷新失败: ' + (error.response?.data?.detail || error.message))
-    // 恢复原状态
     const index = folders.value.findIndex(f => f.path === row.path)
     if (index !== -1) {
       folders.value[index].status = 'cached'
@@ -915,7 +896,6 @@ async function handleRefreshFolder(row) {
   }
 }
 
-// 处理单个文件夹（重命名、过滤、扁平化、移动入库）
 async function handleProcessSingle(row) {
   try {
     await ElMessageBox.confirm(
@@ -930,20 +910,15 @@ async function handleProcessSingle(row) {
     
     processing.value = true
     
-    // 调用处理接口，传入单个文件夹
-    const response = await axios.post('/api/existing-folders/process', {
-      folders: [row.path],
-      auto_classify: autoClassify.value
-    })
+    const data = await existingFolderApi.process([row.path], autoClassify.value)
     
     resultData.value = {
       success: true,
-      message: response.data.message,
-      tasks: response.data.tasks || []
+      message: data.message,
+      tasks: data.tasks || []
     }
     resultDialogVisible.value = true
     
-    // 处理成功后刷新列表（该文件夹会被移走）
     setTimeout(() => {
       refreshFolders()
     }, 1000)

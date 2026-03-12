@@ -103,6 +103,11 @@ class ExtractService:
         # 2. 修复后缀名
         task.update_progress(10, "检测文件类型")
         archive_path = await self._repair_extension(archive_path)
+
+        # 更新任务的 source_path，确保归档时使用正确的路径
+        if archive_path != task.source_path:
+            logger.info(f"[Extract] 文件路径已更新: {task.source_path} -> {archive_path}")
+            task.source_path = archive_path
         
         # 3. 检查是否是分卷
         volume_set = self._detect_volume_set(archive_path)
@@ -315,8 +320,18 @@ class ExtractService:
                                     
                                     # 删除原始的嵌套压缩包文件
                                     try:
-                                        os.remove(file_path)
-                                        logger.info(f"已删除嵌套压缩包文件: {file_path}")
+                                        # 检查是否是分卷压缩包
+                                        volume_set = self._detect_volume_set(file_path)
+                                        if volume_set:
+                                            # 如果是分卷压缩包，删除所有相关分卷
+                                            for volume_path in volume_set.volumes:
+                                                if os.path.exists(volume_path):
+                                                    os.remove(volume_path)
+                                                    logger.info(f"已删除嵌套压缩包分卷文件: {volume_path}")
+                                        else:
+                                            # 只是普通单文件压缩包
+                                            os.remove(file_path)
+                                            logger.info(f"已删除嵌套压缩包文件: {file_path}")
                                     except Exception as e:
                                         logger.warning(f"删除嵌套压缩包文件失败: {file_path}, 错误: {e}")
                                     
@@ -525,11 +540,21 @@ class ExtractService:
             await asyncio.sleep(config.file_stable_interval)
     
     async def _repair_extension(self, file_path: str) -> str:
-        """修复文件后缀名"""
+        """修复文件后缀名和文件名
+        
+        处理情况：
+        1. 有常见压缩后缀名但类型不匹配 → 修复后缀名
+        2. 无后缀名或后缀名不常见，但检测到是压缩文件 → 规范化文件名并添加正确的后缀名
+        
+        文件名规范化：
+        - 39.RJ01570159 → RJ01570159.rar
+        - 01503161 → RJ01503161.zip
+        """
         if not self.config.extract.auto_repair_extension:
             return file_path
         
         filename = Path(file_path).name
+        current_ext = Path(file_path).suffix.lower()
         
         # 跳过自解压文件（.exe）
         if filename.lower().endswith('.exe'):
@@ -542,22 +567,309 @@ class ExtractService:
             logger.info(f"跳过分卷压缩文件后缀名修复: {file_path}")
             return file_path
         
+        # 跳过无扩展名的分卷压缩文件 (.part1, .part2, ...)
+        if re.search(r'\.part\d+$', filename, re.IGNORECASE):
+            logger.info(f"跳过无扩展名的分卷压缩文件后缀名修复: {file_path}")
+            return file_path
+        
+        # 跳过 ZIP 分卷压缩文件 (.z01, .z02, ...)
+        if re.search(r'\.z\d+$', filename, re.IGNORECASE):
+            logger.info(f"跳过 ZIP 分卷压缩文件后缀名修复: {file_path}")
+            return file_path
+
+        # 跳过 7z 分卷压缩文件 (.7z.001, .7z.002, ...)
+        if re.search(r'\.7z\.\d{3}$', filename, re.IGNORECASE):
+            logger.info(f"跳过 7z 分卷压缩文件后缀名修复: {file_path}")
+            return file_path
+
+        # 常见压缩后缀名
+        common_archive_extensions = {'.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.z01', '.z'}
+        
         # 检测真实文件类型
         real_type = await self._detect_real_type(file_path)
         if not real_type:
             logger.warning(f"无法检测文件类型: {file_path}")
             return file_path
         
-        # 获取正确的后缀名
         correct_ext = self._get_correct_extension(real_type)
-        current_ext = Path(file_path).suffix.lower()
         
-        if current_ext != f".{correct_ext}":
-            new_path = self._rename_with_extension(file_path, correct_ext)
-            logger.info(f"修复后缀名: {file_path} -> {new_path}")
+        # 情况1: 文件有常见压缩后缀名，检查是否需要修复
+        if current_ext in common_archive_extensions:
+            if current_ext != f".{correct_ext}":
+                new_path = self._rename_with_extension(file_path, correct_ext)
+                logger.info(f"修复后缀名: {file_path} -> {new_path}")
+                return new_path
+            return file_path
+        
+        # 情况2: 文件无后缀名或后缀名不常见，但检测到是压缩文件
+        # 需要规范化文件名并添加后缀名
+        # 注意：使用完整文件名而不是 stem，因为 Path.suffix 可能误识别
+        # 例如：39.RJ01570159 的 stem 是 "39"，suffix 是 ".RJ01570159"
+        full_filename = Path(file_path).name  # 获取完整文件名
+        normalized_name = self._normalize_filename(full_filename)
+        new_path = self._rename_with_normalized_name(file_path, normalized_name, correct_ext)
+        logger.info(f"规范文件名并添加后缀: {file_path} -> {new_path}")
+        return new_path
+    
+    def _normalize_filename(self, filename: str) -> str:
+        """规范化文件名，提取或构造RJ号
+        
+        例如:
+        - 39.RJ01570159 → RJ01570159
+        - 01503161 → RJ01503161
+        - RJ123456 → RJ123456
+        """
+        # 先匹配标准RJ号格式，8位优先于6位
+        rj_match = re.search(r'[RVB]J(\d{8}|\d{6})(?!\d)', filename, re.IGNORECASE)
+        if rj_match:
+            return rj_match.group(0).upper()
+        
+        # 匹配纯数字，8位优先于6位
+        num_match = re.search(r'(\d{8}|\d{6})(?!\d)', filename)
+        if num_match:
+            return f"RJ{num_match.group(1)}"
+        
+        return filename
+    
+    def _rename_with_normalized_name(self, file_path: str, new_name: str, ext: str) -> str:
+        """用规范化的文件名重命名文件并添加后缀"""
+        path = Path(file_path)
+        new_filename = f"{new_name}.{ext}"
+        new_path = path.parent / new_filename
+        
+        counter = 1
+        while new_path.exists():
+            new_filename = f"{new_name}({counter}).{ext}"
+            new_path = path.parent / new_filename
+            counter += 1
+        
+        os.rename(file_path, new_path)
+        return str(new_path)
+    
+    async def normalize_archive_filename(self, file_path: str) -> str:
+        """规范化压缩包文件名（在任务创建前调用）
+
+        如果文件名需要规范化，会重命名文件并返回新路径
+        如果不需要规范化，返回原路径
+
+        对于分卷压缩文件，会统一规范化整个分卷组
+        """
+        if not self.config.extract.auto_repair_extension:
+            return file_path
+
+        path = Path(file_path)
+        filename = path.name
+        current_ext = path.suffix.lower()
+
+        # 检查是否是分卷压缩文件
+        volume_set = self._detect_volume_set(file_path)
+        if volume_set:
+            # 对于 .7z.xxx 格式的分卷，完全跳过规范化（这种格式已经是正确的）
+            if volume_set.type == '7z_volume_with_ext':
+                logger.info(f"[VolumeNormalize] .7z.xxx 格式的分卷，跳过规范化: {filename}")
+                return file_path
+            return await self._normalize_volume_set(file_path, volume_set)
+
+        # 常见压缩后缀名
+        common_archive_extensions = {'.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.z01', '.z'}
+
+        # 如果文件已有常见压缩后缀名，不需要规范化文件名
+        if current_ext in common_archive_extensions:
+            return file_path
+        
+        # 检测真实文件类型
+        real_type = await self._detect_real_type(file_path)
+        if not real_type:
+            logger.info(f"[Normalize] 无法检测文件类型，保持原样: {file_path}")
+            return file_path
+
+        correct_ext = self._get_correct_extension(real_type)
+
+        # 规范化文件名
+        normalized_name = self._normalize_filename(filename)
+
+        # 检查是否需要重命名
+        # 1. 文件名需要规范化
+        # 2. 或者文件缺少后缀需要添加
+        need_rename = normalized_name != filename
+
+        # 检查文件是否缺少后缀（当前无后缀或后缀不是常见压缩格式）
+        current_has_valid_ext = current_ext in common_archive_extensions
+
+        if not need_rename and current_has_valid_ext:
+            # 文件名已规范化且有有效后缀，无需处理
+            return file_path
+
+        if not need_rename and not current_has_valid_ext:
+            # 文件名已规范化但缺少后缀，只添加后缀
+            new_filename = f"{normalized_name}.{correct_ext}"
+            new_path = os.path.join(os.path.dirname(file_path), new_filename)
+            logger.info(f"[RENAME] 添加缺失的后缀: {file_path} -> {new_path}")
+
+            # 处理重名
+            counter = 1
+            while os.path.exists(new_path):
+                new_filename = f"{normalized_name}({counter}).{correct_ext}"
+                new_path = os.path.join(os.path.dirname(file_path), new_filename)
+                counter += 1
+
+            os.rename(file_path, new_path)
             return new_path
+
+        # 文件名需要规范化，重命名文件
+        new_path = self._rename_with_normalized_name(file_path, normalized_name, correct_ext)
+        logger.info(f"[RENAME] 文件名规范化: {file_path} -> {new_path}")
+        return new_path
+    
+    async def _normalize_volume_set(self, file_path: str, volume_set: 'VolumeSet') -> str:
+        """规范化分卷压缩包组的文件名
+
+        例如: 39.RJ123456.part1.rar, 39.RJ123456.part2.rar -> RJ123456.part1.rar, RJ123456.part2.rar
+
+        对于 .7z.xxx 格式的分卷，保持 .7z.xxx 后缀不变
+        """
+        base_name = volume_set.base_name
+        vtype = volume_set.type
+
+        # 对于 .7z.xxx 格式的分卷，完全跳过规范化（这种格式是正确的）
+        if vtype == '7z_volume_with_ext':
+            # 检查首卷文件名格式
+            first_volume = volume_set.volumes[0] if volume_set.volumes else file_path
+            first_filename = os.path.basename(first_volume)
+            # 检查是否符合 RJxxxxxx.7z.001 格式（RJ号开头，然后是 .7z.分卷号）
+            if re.match(r'^RJ\d+\.7z\.\d{3}$', first_filename, re.IGNORECASE):
+                logger.info(f"[VolumeNormalize] 分卷文件名已是标准格式，无需修改: {first_filename}")
+                return file_path
+
+        normalized_base = self._normalize_filename(base_name)
+
+        logger.info(f"[VolumeNormalize] base_name={base_name}, normalized_base={normalized_base}, vtype={vtype}")
+
+        if normalized_base == base_name:
+            logger.info(f"分卷组文件名无需规范化: {base_name}")
+            return file_path
+
+        directory = os.path.dirname(file_path)
+        rename_map = []
+
+        for volume_path in volume_set.volumes:
+            volume_filename = os.path.basename(volume_path)
+            pattern = self._get_volume_pattern(volume_filename)
+            logger.info(f"[VolumeNormalize] 处理分卷: {volume_filename}, pattern={pattern}")
+            if pattern:
+                suffix = pattern.group(0)
+                new_filename = f"{normalized_base}{suffix}"
+                new_path = os.path.join(directory, new_filename)
+                rename_map.append((volume_path, new_path))
+                logger.info(f"[VolumeNormalize] 计划重命名: {volume_filename} -> {new_filename}")
+
+        if not rename_map:
+            logger.warning(f"[VolumeNormalize] 没有找到需要重命名的分卷文件")
+            return file_path
+
+        for old_path, new_path in rename_map:
+            if old_path != new_path and os.path.exists(old_path):
+                os.rename(old_path, new_path)
+                logger.info(f"[RENAME] 分卷重命名: {old_path} -> {new_path}")
+
+        return rename_map[0][1] if rename_map else file_path
+    
+    def _get_volume_pattern(self, filename: str) -> Optional[re.Match]:
+        """获取分卷后缀模式匹配"""
+        patterns = [
+            r'\.7z\.\d{3}$',                # .7z.001, .7z.002 (7z分卷，带.7z扩展名)
+            r'\.part\d+\.(rar|zip|7z)$',  # 带扩展名的分卷
+            r'\.part\d+$',                  # 无扩展名的分卷 (如 .part1)
+            r'\.z\d{2}$',
+            r'\.\d{3}$',
+            r'\.\d{2}$',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, filename, re.IGNORECASE)
+            if match:
+                return match
+        return None
+    
+    def _get_volume_set_normalized_filename(self, file_path: str, volume_set: 'VolumeSet') -> Optional[str]:
+        """获取分卷组规范化后的首卷文件名（不执行重命名）
         
-        return file_path
+        返回首卷的规范化文件名，如果不需要规范化则返回 None
+        """
+        base_name = volume_set.base_name
+        normalized_base = self._normalize_filename(base_name)
+        
+        if normalized_base == base_name:
+            logger.debug(f"[Normalize] 分卷组文件名无需规范化: {base_name}")
+            return None
+        
+        first_volume = volume_set.volumes[0] if volume_set.volumes else file_path
+        first_filename = os.path.basename(first_volume)
+        pattern = self._get_volume_pattern(first_filename)
+        
+        if pattern:
+            suffix = pattern.group(0)
+            result = f"{normalized_base}{suffix}"
+            logger.info(f"[Normalize] 需要规范化分卷组: {base_name} -> {normalized_base}, 首卷: {first_filename} -> {result}")
+            return result
+        
+        return None
+    
+    async def get_normalized_filename(self, file_path: str) -> Optional[str]:
+        """获取规范化后的文件名（不执行重命名）
+        
+        返回规范化后的完整文件名，如果不需要规范化则返回 None
+        
+        对于分卷压缩文件，返回首卷的规范化文件名
+        """
+        if not self.config.extract.auto_repair_extension:
+            logger.debug(f"[Normalize] auto_repair_extension 未启用")
+            return None
+        
+        path = Path(file_path)
+        filename = path.name
+        current_ext = path.suffix.lower()
+        
+        logger.debug(f"[Normalize] 检查文件: {filename}, 当前后缀: {current_ext}")
+        
+        # 检查是否是分卷压缩文件
+        volume_set = self._detect_volume_set(file_path)
+        if volume_set:
+            return self._get_volume_set_normalized_filename(file_path, volume_set)
+        
+        # 常见压缩后缀名
+        common_archive_extensions = {'.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.z01', '.z'}
+        
+        # 如果文件已有常见压缩后缀名，不需要规范化
+        if current_ext in common_archive_extensions:
+            logger.debug(f"[Normalize] 已有常见压缩后缀，跳过: {current_ext}")
+            return None
+        
+        # 规范化文件名
+        normalized_name = self._normalize_filename(filename)
+        logger.debug(f"[Normalize] 规范化结果: {filename} -> {normalized_name}")
+        
+        if normalized_name == filename:
+            logger.debug(f"[Normalize] 文件名不需要变化")
+            return None
+        
+        # 检测真实文件类型
+        real_type = await self._detect_real_type(file_path)
+        if real_type:
+            correct_ext = self._get_correct_extension(real_type)
+            logger.debug(f"[Normalize] 检测到类型: {real_type}, 正确后缀: {correct_ext}")
+        else:
+            # 如果检测不到类型，尝试从文件名推断
+            if re.search(r'\.(rar|zip|7z)$', filename, re.IGNORECASE):
+                match = re.search(r'\.(rar|zip|7z)$', filename, re.IGNORECASE)
+                correct_ext = match.group(1).lower()
+            else:
+                # 默认使用 rar
+                correct_ext = 'rar'
+            logger.debug(f"[Normalize] 无法检测类型，使用默认: {correct_ext}")
+        
+        result = f"{normalized_name}.{correct_ext}"
+        logger.info(f"[Normalize] 需要规范化: {filename} -> {result}")
+        return result
     
     async def _detect_real_type(self, file_path: str) -> Optional[str]:
         """检测文件真实类型"""
@@ -640,15 +952,33 @@ class ExtractService:
         return extension_map.get(file_type, file_type)
     
     def _rename_with_extension(self, file_path: str, new_ext: str) -> str:
-        """重命名文件并修改后缀"""
+        """重命名文件并修改后缀（用于已有错误后缀的文件）"""
         path = Path(file_path)
         new_name = f"{path.stem}.{new_ext}"
         new_path = path.parent / new_name
         
-        # 如果目标已存在，添加序号
         counter = 1
         while new_path.exists():
             new_name = f"{path.stem}({counter}).{new_ext}"
+            new_path = path.parent / new_name
+            counter += 1
+        
+        os.rename(file_path, new_path)
+        return str(new_path)
+    
+    def _add_extension(self, file_path: str, ext: str) -> str:
+        """为文件添加后缀名（用于无后缀或后缀不正确的压缩文件）
+        
+        例如: 39.RJ01570159 -> 39.RJ01570159.rar
+              01503161 -> 01503161.zip
+        """
+        path = Path(file_path)
+        new_name = f"{path.name}.{ext}"
+        new_path = path.parent / new_name
+        
+        counter = 1
+        while new_path.exists():
+            new_name = f"{path.name}({counter}).{ext}"
             new_path = path.parent / new_name
             counter += 1
         
@@ -659,32 +989,53 @@ class ExtractService:
         """检测是否是分卷压缩包"""
         directory = os.path.dirname(file_path)
         filename = os.path.basename(file_path)
-        
-        # 分卷模式识别
+
+        # 分卷模式识别（按优先级排序，更具体的模式在前）
         patterns = [
+            (r'\.7z\.(\d{3})$', '7z_volume_with_ext'),  # .7z.001, .7z.002 (7z分卷，带.7z扩展名)
             (r'\.part(\d+)\.(rar|zip|7z)$', 'part'),
+            (r'\.part(\d+)$', 'part_no_ext'),  # 无扩展名的RAR分卷格式
             (r'\.z(\d{2})$', 'zip_volume'),
-            (r'\.(\d{3})$', '7z_volume'),
+            (r'\.(\d{3})$', '7z_volume'),  # 纯数字分卷（如 .001, .002）
             (r'\.(\d{2})$', 'generic'),
         ]
-        
+
         for pattern, vtype in patterns:
             match = re.search(pattern, filename, re.IGNORECASE)
             if match:
+                # 正确提取base_name，保留完整的基础名称，只移除分卷后缀
                 base_name = re.sub(pattern, '', filename)
+                logger.info(f"[VolumeSet] 检测到分卷模式: {filename}, base_name={base_name}, pattern={pattern}, vtype={vtype}")
+
+                # 查找目录中所有匹配该基础名称和模式的文件
                 volumes = self._find_all_volumes(directory, base_name, pattern)
-                if len(volumes) > 1:
+                logger.info(f"[VolumeSet] 找到 {len(volumes)} 个分卷: {volumes}")
+
+                # 对于 part 类型的分卷，必须有多个文件才算分卷组
+                if vtype in ['part', 'part_no_ext'] and len(volumes) > 1:
                     return VolumeSet(base_name, volumes, vtype)
-        
+                # 对于其他类型的分卷，也需要至少2个文件
+                elif len(volumes) > 1:
+                    return VolumeSet(base_name, volumes, vtype)
+
         return None
     
     def _find_all_volumes(self, directory: str, base_name: str, pattern: str) -> List[str]:
         """查找所有分卷文件"""
         volumes = []
-        for file in os.listdir(directory):
-            if file.startswith(base_name) and re.search(pattern, file, re.IGNORECASE):
-                volumes.append(os.path.join(directory, file))
-        return sorted(volumes)
+        logger.debug(f"[FindVolumes] directory={directory}, base_name={base_name}, pattern={pattern}")
+        try:
+            files = os.listdir(directory)
+            logger.debug(f"[FindVolumes] 目录中的文件: {files}")
+            for file in files:
+                if file.startswith(base_name) and re.search(pattern, file, re.IGNORECASE):
+                    volumes.append(os.path.join(directory, file))
+                    logger.debug(f"[FindVolumes] 匹配到分卷: {file}")
+        except Exception as e:
+            logger.error(f"[FindVolumes] 列出目录失败: {e}")
+        result = sorted(volumes)
+        logger.info(f"[FindVolumes] 找到 {len(result)} 个分卷: {[os.path.basename(v) for v in result]}")
+        return result
     
     async def _wait_for_complete_set(self, volume_set: 'VolumeSet', task: Optional[Task] = None, max_wait: int = 3600) -> bool:
         """等待分卷组完整"""
@@ -841,8 +1192,10 @@ class ExtractService:
             cmd.append('-p')  # 空密码
         
         try:
+            logger.debug(f"[7z] 执行命令: {' '.join(cmd)}")
             result = await self._run_7z_command(cmd)
             if result.returncode != 0:
+                logger.warning(f"[7z] 列出压缩包内容失败，返回码: {result.returncode}, 错误: {result.stderr.decode('utf-8', errors='ignore')[:500]}")
                 return None
             
             # 使用gbk解码，与原来代码一致

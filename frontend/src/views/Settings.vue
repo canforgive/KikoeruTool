@@ -84,6 +84,23 @@
             </el-form-item>
           </el-col>
         </el-row>
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="ASMR字幕文件夹">
+              <el-input
+                v-model="config.storage.asmr_subtitle_path"
+                placeholder="例如: D:\\prekikoeru\\subtitles"
+              >
+                <template #prefix>
+                  <el-icon><Folder /></el-icon>
+                </template>
+              </el-input>
+              <div class="form-tip">
+                ASMR同步下载功能使用的字幕文件夹路径
+              </div>
+            </el-form-item>
+          </el-col>
+        </el-row>
         <el-row>
           <el-col :span="24">
             <el-button type="primary" size="small" @click="createTestDirs">
@@ -596,6 +613,13 @@
           </div>
         </el-form-item>
 
+        <el-form-item label="启动时扫描压缩包目录">
+          <el-switch v-model="config.processed_archive_cleanup.scan_on_startup" />
+          <div class="form-tip">
+            开启后，程序启动时会扫描已处理压缩包目录并同步数据库记录
+          </div>
+        </el-form-item>
+
         <el-divider />
 
         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
@@ -797,7 +821,7 @@
           label-position="top"
         >
           <el-row :gutter="20">
-            <el-col :span="16">
+            <el-col :span="24">
               <el-form-item label="服务器地址">
                 <el-input 
                   v-model="config.kikoeru_server.server_url" 
@@ -810,19 +834,53 @@
                 <div class="form-tip">Kikoeru 服务器的完整 URL 地址</div>
               </el-form-item>
             </el-col>
-            <el-col :span="8">
-              <el-form-item label="API Token">
+          </el-row>
+
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="用户名">
                 <el-input 
-                  v-model="config.kikoeru_server.api_token" 
-                  placeholder="访问令牌"
+                  v-model="config.kikoeru_server.username" 
+                  placeholder="登录用户名"
+                >
+                  <template #prefix>
+                    <el-icon><User /></el-icon>
+                  </template>
+                </el-input>
+                <div class="form-tip">Kikoeru 登录用户名</div>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="密码">
+                <el-input 
+                  v-model="config.kikoeru_server.password" 
+                  placeholder="登录密码"
                   show-password
                 >
                   <template #prefix>
                     <el-icon><Key /></el-icon>
                   </template>
                 </el-input>
-                <div class="form-tip">用于认证的 API Token（如需要）</div>
+                <div class="form-tip">Kikoeru 登录密码，用于自动获取 Token</div>
               </el-form-item>
+            </el-col>
+          </el-row>
+
+          <el-row :gutter="20" style="margin-bottom: 20px;">
+            <el-col :span="24">
+              <el-button 
+                type="primary" 
+                @click="fetchKikoeruToken"
+                :loading="fetchingKikoeruToken"
+                :disabled="!config.kikoeru_server.server_url || !config.kikoeru_server.username || !config.kikoeru_server.password"
+              >
+                <el-icon><Key /></el-icon>
+                手动获取 Token
+              </el-button>
+              <span v-if="kikoeruTokenStatus" :style="{ marginLeft: '10px', color: kikoeruTokenStatus.success ? '#67c23a' : '#f56c6c' }">
+                {{ kikoeruTokenStatus.message }}
+              </span>
+              <div class="form-tip">点击按钮使用账号密码登录获取 Token，Token 过期后会自动重新获取</div>
             </el-col>
           </el-row>
 
@@ -891,6 +949,7 @@
                 <template #default>
                   <p>启用后，系统在查重时会同时查询本地库和远程 Kikoeru 服务器。</p>
                   <p>适用于多个设备/服务器共享同一个 Kikoeru 库的场景。</p>
+                  <p>配置用户名和密码后，系统会自动获取 Token，Token 过期后会自动重新获取。</p>
                   <p>支持的 URL 格式: <code>http://ip:port</code> 或 <code>https://domain</code></p>
                 </template>
               </el-alert>
@@ -972,6 +1031,112 @@
             </el-result>
           </div>
         </el-dialog>
+      </el-card>
+
+      <!-- ASMR 同步配置 -->
+      <el-card class="setting-card">
+        <template #header>
+          <div class="card-header">
+            <span>ASMR 同步下载</span>
+          </div>
+        </template>
+
+        <el-form label-width="120px">
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="重试Cron">
+                <el-input
+                  v-model="config.asmr_sync.retry_cron"
+                  placeholder="0 */1 * * *"
+                />
+              </el-form-item>
+              <div class="form-tip">Cron表达式，默认每小时执行一次（0 */1 * * *）</div>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="最大重试次数">
+                <el-input-number
+                  v-model="config.asmr_sync.max_retry_count"
+                  :min="1"
+                  :max="100"
+                />
+                <span style="margin-left: 10px;">次</span>
+              </el-form-item>
+              <div class="form-tip">达到最大次数后任务将标记为失败</div>
+            </el-col>
+          </el-row>
+
+          <el-row :gutter="20">
+            <el-col :span="12">
+              <el-form-item label="并发下载数">
+                <el-input-number
+                  v-model="config.asmr_sync.max_concurrent_downloads"
+                  :min="1"
+                  :max="10"
+                />
+              </el-form-item>
+              <div class="form-tip">同时下载的文件数量</div>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="HTTP代理">
+                <el-input
+                  v-model="config.asmr_sync.http_proxy"
+                  placeholder="127.0.0.1:7890"
+                />
+              </el-form-item>
+              <div class="form-tip">可选，用于访问 asmr.one</div>
+            </el-col>
+          </el-row>
+
+          <!-- LRC广告清理配置 -->
+          <el-divider content-position="left">LRC广告清理</el-divider>
+
+          <el-form-item label="启用广告清理">
+            <el-switch v-model="config.asmr_sync.lrc_clean_enabled" />
+            <div class="form-tip">启用后将自动清理LRC字幕文件中的广告内容</div>
+          </el-form-item>
+
+          <el-form-item label="清理规则" v-if="config.asmr_sync.lrc_clean_enabled">
+            <div style="width: 100%;">
+              <div v-for="(pattern, index) in config.asmr_sync.lrc_clean_patterns" :key="index" style="display: flex; gap: 8px; margin-bottom: 8px;">
+                <el-input
+                  v-model="config.asmr_sync.lrc_clean_patterns[index]"
+                  placeholder="正则表达式，如 @[\w]{3,}"
+                  style="flex: 1;"
+                />
+                <el-button type="danger" link @click="config.asmr_sync.lrc_clean_patterns.splice(index, 1)">
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </div>
+              <el-button type="primary" size="small" @click="config.asmr_sync.lrc_clean_patterns.push('')">
+                <el-icon><Plus /></el-icon> 添加规则
+              </el-button>
+            </div>
+            <div class="form-tip" style="margin-top: 8px;">
+              使用正则表达式匹配广告内容，匹配到的文本将被清除。常见规则：<br>
+              • <code>@[\w]{3,}</code> - 匹配@账号（如Telegram账号）<br>
+              • <code>Telegram</code> - 匹配Telegram关键词<br>
+              • <code>QQ群[：:]\s*\d+</code> - 匹配QQ群号
+            </div>
+          </el-form-item>
+
+          <el-form-item label="字幕繁体转简体">
+            <el-switch v-model="config.asmr_sync.simplify_chinese_enabled" />
+            <div class="form-tip">启用后将自动将繁体中文字幕转换为简体中文</div>
+          </el-form-item>
+
+          <el-form-item>
+            <el-alert
+              title="关于 ASMR 同步下载"
+              type="info"
+              :closable="false"
+            >
+              <template #default>
+                <p>ASMR 同步功能会根据字幕文件自动从 asmr.one 下载对应的音频文件。</p>
+                <p>当作品在 asmr.one 上找不到时，任务会进入"等待重试"状态，系统会根据Cron表达式定期重试。</p>
+              </template>
+            </el-alert>
+          </el-form-item>
+        </el-form>
       </el-card>
 
       <!-- 分类规则 -->
@@ -1115,10 +1280,10 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { Folder, FolderOpened, Plus, Delete, Check, QuestionFilled, Tools, Warning, View, ArrowRight, Document, Connection, Key, Link, Search } from '@element-plus/icons-vue'
+import { Folder, FolderOpened, Plus, Delete, Check, QuestionFilled, Tools, Warning, View, ArrowRight, Document, Connection, Key, Link, Search, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import axios from 'axios'
 import { useConfigStore } from '../stores'
+import { configApi, kikoeruApi, pathMappingApi, cleanupApi } from '../api'
 
 const configStore = useConfigStore()
 const loading = ref(false)
@@ -1127,7 +1292,8 @@ const defaultConfig = {
   storage: {
     input_path: '/input',
     temp_path: '/temp',
-    library_path: '/library'
+    library_path: '/library',
+    asmr_subtitle_path: ''
   },
   processing: {
     max_workers: 4
@@ -1206,7 +1372,8 @@ const defaultConfig = {
     preserve_days: 30,
     max_count: 1000,
     max_size_gb: 50,
-    exclude_reprocessing: true
+    exclude_reprocessing: true,
+    scan_on_startup: true
   },
   path_mapping: {
     enabled: false,
@@ -1216,9 +1383,35 @@ const defaultConfig = {
   kikoeru_server: {
     enabled: false,
     server_url: '',
+    username: '',
+    password: '',
     api_token: '',
+    token_expires: 0,
     timeout: 10,
     cache_ttl: 300
+  },
+  asmr_sync: {
+    enabled: true,
+    api_base_url: 'https://api.asmr-200.com/api',
+    max_concurrent_downloads: 3,
+    http_proxy: null,
+    retry_interval_hours: 1.0,
+    max_retry_count: 10,
+    retry_cron: '0 */1 * * *',
+    retry_count: 3,
+    retry_delay: 5,
+    lrc_clean_enabled: true,
+    lrc_clean_patterns: [
+      '@[\\w]{3,}',
+      'Telegram',
+      'telegram',
+      '电报',
+      'tg群',
+      'TG群',
+      'QQ群[：:]\\s*\\d+',
+      '群号[：:]\\s*\\d+'
+    ],
+    simplify_chinese_enabled: true
   }
 }
 
@@ -1363,7 +1556,8 @@ async function loadConfig() {
           preserve_days: 30,
           max_count: 1000,
           max_size_gb: 50,
-          exclude_reprocessing: true
+          exclude_reprocessing: true,
+          scan_on_startup: true
         }
       }
       // 确保 processed_archive_cleanup 的字段都存在
@@ -1387,6 +1581,9 @@ async function loadConfig() {
       }
       if (mergedConfig.processed_archive_cleanup.exclude_reprocessing === undefined) {
         mergedConfig.processed_archive_cleanup.exclude_reprocessing = true
+      }
+      if (mergedConfig.processed_archive_cleanup.scan_on_startup === undefined) {
+        mergedConfig.processed_archive_cleanup.scan_on_startup = true
       }
 
       // 确保 path_mapping 配置完整
@@ -1413,7 +1610,10 @@ async function loadConfig() {
         mergedConfig.kikoeru_server = {
           enabled: false,
           server_url: '',
+          username: '',
+          password: '',
           api_token: '',
+          token_expires: 0,
           timeout: 10,
           cache_ttl: 300
         }
@@ -1425,8 +1625,17 @@ async function loadConfig() {
       if (mergedConfig.kikoeru_server.server_url === undefined) {
         mergedConfig.kikoeru_server.server_url = ''
       }
+      if (mergedConfig.kikoeru_server.username === undefined) {
+        mergedConfig.kikoeru_server.username = ''
+      }
+      if (mergedConfig.kikoeru_server.password === undefined) {
+        mergedConfig.kikoeru_server.password = ''
+      }
       if (mergedConfig.kikoeru_server.api_token === undefined) {
         mergedConfig.kikoeru_server.api_token = ''
+      }
+      if (mergedConfig.kikoeru_server.token_expires === undefined) {
+        mergedConfig.kikoeru_server.token_expires = 0
       }
       if (mergedConfig.kikoeru_server.timeout === undefined) {
         mergedConfig.kikoeru_server.timeout = 10
@@ -1567,11 +1776,9 @@ async function saveConfig() {
     // 调试：打印要保存的过滤规则
     console.log('准备保存的过滤规则:', JSON.parse(JSON.stringify(config.value.filter.rules)))
     
-    // 调用后端API保存配置
-    const response = await axios.post('/api/config', config.value)
-    console.log('保存响应:', response.data)
+    const response = await configApi.save(config.value)
+    console.log('保存响应:', response)
     
-    // 保存成功后重新加载配置，确保前端显示最新数据
     await loadConfig()
     console.log('配置已刷新，过滤规则:', config.value.filter.rules)
     
@@ -1617,6 +1824,8 @@ const testMappingResult = ref({
 // Kikoeru 服务器查重相关
 const testingKikoeru = ref(false)
 const savingKikoeru = ref(false)
+const fetchingKikoeruToken = ref(false)
+const kikoeruTokenStatus = ref(null)
 const kikoeruTestDialogVisible = ref(false)
 const kikoeruTestResult = ref({
   success: false,
@@ -1635,20 +1844,22 @@ async function saveKikoeruConfig() {
   console.log('开始保存 Kikoeru 配置:', config.value.kikoeru_server)
   
   try {
-    // 使用统一的配置保存接口
     const configToSave = {
       kikoeru_server: {
         enabled: config.value.kikoeru_server.enabled,
         server_url: config.value.kikoeru_server.server_url,
+        username: config.value.kikoeru_server.username,
+        password: config.value.kikoeru_server.password,
         api_token: config.value.kikoeru_server.api_token,
+        token_expires: config.value.kikoeru_server.token_expires,
         timeout: config.value.kikoeru_server.timeout,
         cache_ttl: config.value.kikoeru_server.cache_ttl
       }
     }
     
     console.log('发送配置数据:', configToSave)
-    const response = await axios.post('/api/config', configToSave)
-    console.log('保存响应:', response.data)
+    const response = await configApi.save(configToSave)
+    console.log('保存响应:', response)
     
     ElMessage.success('Kikoeru 服务器配置已保存')
   } catch (error) {
@@ -1660,6 +1871,56 @@ async function saveKikoeruConfig() {
   }
 }
 
+async function fetchKikoeruToken() {
+  if (!config.value.kikoeru_server.server_url) {
+    ElMessage.warning('请先配置服务器地址')
+    return
+  }
+  if (!config.value.kikoeru_server.username || !config.value.kikoeru_server.password) {
+    ElMessage.warning('请先配置用户名和密码')
+    return
+  }
+  
+  fetchingKikoeruToken.value = true
+  kikoeruTokenStatus.value = null
+  
+  try {
+    const configToSave = {
+      kikoeru_server: {
+        enabled: true,
+        server_url: config.value.kikoeru_server.server_url,
+        username: config.value.kikoeru_server.username,
+        password: config.value.kikoeru_server.password,
+        api_token: '',
+        token_expires: 0,
+        timeout: config.value.kikoeru_server.timeout,
+        cache_ttl: config.value.kikoeru_server.cache_ttl
+      }
+    }
+    
+    const response = await configApi.save(configToSave)
+    config.value.kikoeru_server.enabled = true
+    
+    const data = await kikoeruApi.testConnection()
+    
+    if (data.success) {
+      kikoeruTokenStatus.value = { success: true, message: 'Token 获取成功！' }
+      ElMessage.success('Token 获取成功')
+      
+      await loadConfig()
+    } else {
+      kikoeruTokenStatus.value = { success: false, message: '获取失败: ' + data.message }
+      ElMessage.error('Token 获取失败: ' + data.message)
+    }
+  } catch (error) {
+    console.error('获取 Kikoeru Token 失败:', error)
+    kikoeruTokenStatus.value = { success: false, message: '获取失败: ' + (error.response?.data?.detail || error.message) }
+    ElMessage.error('获取 Token 失败')
+  } finally {
+    fetchingKikoeruToken.value = false
+  }
+}
+
 async function testKikoeruConnection() {
   if (!config.value.kikoeru_server.server_url) {
     ElMessage.warning('请先配置服务器地址')
@@ -1668,14 +1929,14 @@ async function testKikoeruConnection() {
   
   testingKikoeru.value = true
   try {
-    const response = await axios.post('/api/kikoeru-server/test')
-    kikoeruTestResult.value = response.data
+    const data = await kikoeruApi.testConnection()
+    kikoeruTestResult.value = data
     kikoeruTestDialogVisible.value = true
     
-    if (response.data.success) {
+    if (data.success) {
       ElMessage.success('连接测试成功')
     } else {
-      ElMessage.error('连接测试失败: ' + response.data.message)
+      ElMessage.error('连接测试失败: ' + data.message)
     }
   } catch (error) {
     console.error('测试 Kikoeru 连接失败:', error)
@@ -1691,7 +1952,6 @@ async function testKikoeruConnection() {
   }
 }
 
-// 测试 Kikoeru 查重功能
 async function testKikoeruCheck() {
   if (!kikoeruTestRjcode.value) {
     ElMessage.warning('请输入RJ号')
@@ -1699,18 +1959,24 @@ async function testKikoeruCheck() {
   }
   
   testingKikoeruCheck.value = true
+  kikoeruCheckResult.value = null
   try {
-    const response = await axios.post('/api/kikoeru-server/check', null, {
-      params: {
-        rjcode: kikoeruTestRjcode.value
-      }
-    })
+    const data = await kikoeruApi.check(kikoeruTestRjcode.value)
     
-    kikoeruCheckResult.value = response.data
+    kikoeruCheckResult.value = {
+      rjcode: data.rjcode || kikoeruTestRjcode.value,
+      is_found: data.is_found || false,
+      title: data.title || '',
+      circle_name: data.circle_name || '',
+      tags: data.tags || [],
+      linked_works_found: data.linked_works_found || [],
+      total_checked: data.total_checked || 1,
+      message: data.message || ''
+    }
     kikoeruCheckDialogVisible.value = true
     
-    if (response.data.is_found) {
-      ElMessage.success(`找到作品: ${response.data.title || response.data.rjcode}`)
+    if (data.is_found) {
+      ElMessage.success(`找到作品: ${data.title || data.rjcode}`)
     } else {
       ElMessage.info('未在 Kikoeru 服务器中找到该作品')
     }
@@ -1719,7 +1985,12 @@ async function testKikoeruCheck() {
     kikoeruCheckResult.value = {
       rjcode: kikoeruTestRjcode.value,
       is_found: false,
-      message: error.response?.data?.detail || error.message
+      message: error.response?.data?.detail || error.message,
+      title: '',
+      circle_name: '',
+      tags: [],
+      linked_works_found: [],
+      total_checked: 0
     }
     kikoeruCheckDialogVisible.value = true
     ElMessage.error('查重测试失败: ' + (error.response?.data?.detail || error.message))
@@ -1747,10 +2018,8 @@ function removePathMappingRule(index) {
 
 async function testPathMapping() {
   try {
-    const response = await axios.post('/api/path-mapping/test', {
-      path: testMappingPath.value
-    })
-    testMappingResult.value = response.data
+    const data = await pathMappingApi.test(testMappingPath.value)
+    testMappingResult.value = data
     testMappingDialogVisible.value = true
   } catch (error) {
     console.error('测试路径映射失败:', error)
@@ -1760,15 +2029,13 @@ async function testPathMapping() {
 
 async function previewPasswordCleanup() {
   try {
-    const response = await axios.get('/api/password-cleanup/preview')
-    const data = response.data
+    const data = await cleanupApi.password.preview()
 
     if (data.deleted_count === 0) {
       ElMessage.info('没有需要清理的密码')
       return
     }
 
-    // 显示预览对话框
     const passwordList = data.deleted_passwords.map(p =>
       `• ${p.rjcode || p.filename || '通用密码'} (${p.use_count}次使用, ${p.source})`
     ).join('\n')
@@ -1784,7 +2051,6 @@ async function previewPasswordCleanup() {
       }
     )
 
-    // 用户确认后执行清理
     await runPasswordCleanup()
   } catch (error) {
     if (error !== 'cancel') {
@@ -1797,8 +2063,7 @@ async function previewPasswordCleanup() {
 async function runPasswordCleanup() {
   try {
     loading.value = true
-    const response = await axios.post('/api/password-cleanup/run')
-    const data = response.data
+    const data = await cleanupApi.password.run()
 
     if (data.deleted_count === 0) {
       ElMessage.info('没有需要清理的密码')
@@ -1815,15 +2080,13 @@ async function runPasswordCleanup() {
 
 async function previewArchiveCleanup() {
   try {
-    const response = await axios.get('/api/processed-archive-cleanup/preview')
-    const data = response.data
+    const data = await cleanupApi.archive.preview()
 
     if (data.deleted_count === 0) {
       ElMessage.info('没有需要清理的压缩包')
       return
     }
 
-    // 显示预览对话框
     const archiveList = data.deleted_archives.map(a =>
       `• ${a.filename} (${a.file_size_mb.toFixed(2)} MB)`
     ).join('\n')
@@ -1839,7 +2102,6 @@ async function previewArchiveCleanup() {
       }
     )
 
-    // 用户确认后执行清理
     await runArchiveCleanup()
   } catch (error) {
     if (error !== 'cancel') {
@@ -1852,8 +2114,7 @@ async function previewArchiveCleanup() {
 async function runArchiveCleanup() {
   try {
     loading.value = true
-    const response = await axios.post('/api/processed-archive-cleanup/run')
-    const data = response.data
+    const data = await cleanupApi.archive.run()
 
     if (data.deleted_count === 0) {
       ElMessage.info('没有需要清理的压缩包')

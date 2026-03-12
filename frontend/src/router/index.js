@@ -7,6 +7,7 @@ import Logs from '../views/Logs.vue'
 import Library from '../views/Library.vue'
 import PasswordVault from '../views/PasswordVault.vue'
 import ExistingFolders from '../views/ExistingFolders.vue'
+import ASMRSync from '../views/ASMRSync.vue'
 
 const routes = [
   {
@@ -38,6 +39,11 @@ const routes = [
     path: '/existing-folders',
     name: 'ExistingFolders',
     component: ExistingFolders
+  },
+  {
+    path: '/asmr-sync',
+    name: 'ASMRSync',
+    component: ASMRSync
   },
   {
     path: '/settings',

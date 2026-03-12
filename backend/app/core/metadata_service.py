@@ -83,12 +83,32 @@ class MetadataService:
         return metadata.to_dict()
     
     def _extract_rjcode(self, path: str) -> Optional[str]:
-        """从路径中提取RJ号"""
-        # RJ123456 或 RJ12345678
+        """从路径中提取RJ号
+        
+        支持格式：
+        - RJ123456, RJ12345678
+        - VJ123456, BJ123456
+        - 纯数字目录名：01503161 -> RJ01503161
+        - 带前缀的数字：39.RJ01570159 -> RJ01570159
+        """
+        # 优先匹配标准格式 [RVB]J + 6/8位数字
         pattern = r'[RVB]J(\d{6}|\d{8})(?!\d)'
         match = re.search(pattern, path, re.IGNORECASE)
         if match:
             return match.group(0).upper()
+        
+        # 尝试从路径最后的目录/文件名中提取纯数字
+        path_parts = re.split(r'[\\/]', path)
+        if path_parts:
+            last_part = path_parts[-1]
+            # 移除常见前缀如 "39." 等
+            clean_name = re.sub(r'^\d+\.', '', last_part)
+            # 匹配6位或8位纯数字
+            num_match = re.match(r'^(\d{6}|\d{8})$', clean_name)
+            if num_match:
+                num = num_match.group(1)
+                return f"RJ{num}"
+        
         return None
     
     def _get_cached_metadata(self, rjcode: str) -> Optional[WorkMetadataModel]:

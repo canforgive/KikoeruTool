@@ -1,14 +1,35 @@
 <template>
   <div class="conflicts">
-    <h1 class="page-title">问题作品</h1>
-    <p class="page-desc">检测到重复或冲突的作品，请手动选择处理方式</p>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">问题作品</h1>
+        <p class="page-desc">检测到重复或冲突的作品，请手动选择处理方式</p>
+      </div>
+      <div class="batch-actions" v-if="selectedConflicts.length > 0">
+        <span class="selected-count">已选择 {{ selectedConflicts.length }} 项</span>
+        <el-button-group>
+          <el-button size="small" type="primary" @click="handleBatchAction('KEEP_NEW')">
+            批量保留新版
+          </el-button>
+          <el-button size="small" @click="handleBatchAction('KEEP_OLD')">
+            批量保留旧版
+          </el-button>
+          <el-button size="small" type="info" @click="handleBatchAction('SKIP')">
+            批量跳过
+          </el-button>
+        </el-button-group>
+      </div>
+    </div>
     
-    <el-card v-loading="loading">
+    <el-card v-loading="loading" :element-loading-text="loadingText">
       <el-table 
+        ref="conflictsTable"
         :data="conflicts" 
         style="width: 100%"
         :header-cell-style="{ 'white-space': 'nowrap' }"
+        @selection-change="handleSelectionChange"
       >
+        <el-table-column type="selection" width="40" />
         <el-table-column type="expand" width="40">
           <template #default="{ row }">
             <div class="conflict-detail">
@@ -76,16 +97,16 @@
         <el-table-column label="操作" min-width="280" fixed="right">
           <template #default="{ row }">
             <el-button-group class="action-buttons">
-              <el-button size="small" type="primary" @click="handleAction(row, 'KEEP_NEW')">
+              <el-button size="small" type="primary" @click="handleAction(row, 'KEEP_NEW')" :loading="processingIds.has(row.id)">
                 保留新版
               </el-button>
-              <el-button size="small" @click="handleAction(row, 'KEEP_OLD')">
+              <el-button size="small" @click="handleAction(row, 'KEEP_OLD')" :loading="processingIds.has(row.id)">
                 保留旧版
               </el-button>
-              <el-button size="small" type="warning" @click="handleAction(row, 'MERGE')">
+              <el-button size="small" type="warning" @click="handleAction(row, 'MERGE')" :loading="processingIds.has(row.id)">
                 合并
               </el-button>
-              <el-button size="small" type="info" @click="handleAction(row, 'SKIP')">
+              <el-button size="small" type="info" @click="handleAction(row, 'SKIP')" :loading="processingIds.has(row.id)">
                 跳过
               </el-button>
             </el-button-group>
@@ -101,15 +122,18 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import axios from 'axios'
+import { conflictApi } from '../api'
 
 const conflicts = ref([])
 const loading = ref(false)
+const loadingText = ref('加载中...')
+const selectedConflicts = ref([])
+const conflictsTable = ref(null)
+const processingIds = ref(new Set())
 let intervalId = null
 
 onMounted(async () => {
   await fetchConflicts()
-  // 每5秒自动刷新
   intervalId = setInterval(fetchConflicts, 5000)
 })
 
@@ -121,8 +145,8 @@ onUnmounted(() => {
 
 async function fetchConflicts() {
   try {
-    const response = await axios.get('/api/conflicts')
-    conflicts.value = response.data.conflicts || []
+    const data = await conflictApi.list()
+    conflicts.value = data.conflicts || []
   } catch (error) {
     console.error('获取问题作品失败:', error)
   }
@@ -148,7 +172,28 @@ function getConflictTypeType(type) {
 
 function formatDate(date) {
   if (!date) return ''
-  return new Date(date).toLocaleString('zh-CN')
+  // 尝试处理不同格式的日期字符串
+  let dateObj
+  if (typeof date === 'string') {
+    if (date.includes('T')) {
+      // 如果是ISO 8601格式 (如 '2026-03-01T14:05:00' )，这是UTC时间，需转为本地时间
+      dateObj = new Date(date + 'Z') // 添加'Z'标识UTC
+    } else {
+      dateObj = new Date(date)
+    }
+  } else {
+    dateObj = new Date(date)
+  }
+  // 格式化为中文本地格式
+  return dateObj.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  })
 }
 
 async function handleAction(conflict, action) {
@@ -170,18 +215,92 @@ async function handleAction(conflict, action) {
       }
     )
     
+    processingIds.value.add(conflict.id)
+    loadingText.value = '处理中...'
     loading.value = true
-    await axios.post(`/api/conflicts/${conflict.id}/resolve`, { action })
+    
+    await conflictApi.resolve(conflict.id, action)
     
     ElMessage.success('操作成功')
-    await fetchConflicts()
+    conflicts.value = conflicts.value.filter(c => c.id !== conflict.id)
   } catch (error) {
     if (error !== 'cancel') {
       console.error('操作失败:', error)
       ElMessage.error('操作失败: ' + (error.response?.data?.detail || error.message))
     }
   } finally {
+    processingIds.value.delete(conflict.id)
     loading.value = false
+    loadingText.value = '加载中...'
+  }
+}
+
+function handleSelectionChange(selection) {
+  selectedConflicts.value = selection
+}
+
+async function handleBatchAction(action) {
+  const actionLabels = {
+    'KEEP_NEW': '保留新版',
+    'KEEP_OLD': '保留旧版',
+    'SKIP': '跳过'
+  }
+  
+  if (selectedConflicts.value.length === 0) {
+    ElMessage.warning('请先选择要处理的问题作品')
+    return
+  }
+  
+  try {
+    await ElMessageBox.confirm(
+      `确定要对选中的 ${selectedConflicts.value.length} 个问题作品执行"${actionLabels[action]}"操作吗？`,
+      '批量操作确认',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    
+    loadingText.value = `正在批量处理 ${selectedConflicts.value.length} 个问题作品...`
+    loading.value = true
+    
+    let successCount = 0
+    let failCount = 0
+    
+    for (const conflict of selectedConflicts.value) {
+      try {
+        processingIds.value.add(conflict.id)
+        await conflictApi.resolve(conflict.id, action)
+        successCount++
+        conflicts.value = conflicts.value.filter(c => c.id !== conflict.id)
+      } catch (error) {
+        failCount++
+        console.error(`处理 ${conflict.rjcode} 失败:`, error)
+      } finally {
+        processingIds.value.delete(conflict.id)
+      }
+    }
+    
+    if (successCount > 0) {
+      ElMessage.success(`成功处理 ${successCount} 个问题作品`)
+    }
+    if (failCount > 0) {
+      ElMessage.warning(`${failCount} 个问题作品处理失败`)
+    }
+    
+    selectedConflicts.value = []
+    if (conflictsTable.value) {
+      conflictsTable.value.clearSelection()
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('批量操作失败:', error)
+      ElMessage.error('批量操作失败: ' + (error.response?.data?.detail || error.message))
+    }
+  } finally {
+    loading.value = false
+    loadingText.value = '加载中...'
   }
 }
 </script>
@@ -195,6 +314,13 @@ async function handleAction(conflict, action) {
   box-sizing: border-box;
 }
 
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
 .page-title {
   font-size: 28px;
   font-weight: 600;
@@ -204,10 +330,20 @@ async function handleAction(conflict, action) {
 
 .page-desc {
   color: #64748b;
-  margin-bottom: 24px;
+  margin: 0;
 }
 
-/* RJ号单元格样式 */
+.batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.selected-count {
+  color: #409eff;
+  font-weight: 500;
+}
+
 .rjcode-cell {
   display: flex;
   align-items: center;
@@ -233,7 +369,6 @@ async function handleAction(conflict, action) {
   vertical-align: middle;
 }
 
-/* 路径单元格样式 - 支持多行显示 */
 .path-cell {
   word-break: break-all;
   white-space: normal;
@@ -244,7 +379,6 @@ async function handleAction(conflict, action) {
   color: #606266;
 }
 
-/* 详细视图中的路径文本 */
 .path-text {
   word-break: break-all;
   white-space: pre-wrap;
@@ -258,7 +392,6 @@ async function handleAction(conflict, action) {
   overflow-y: auto;
 }
 
-/* 冲突类型标签样式 */
 .conflict-type-tag {
   white-space: nowrap;
   overflow: hidden;
@@ -266,7 +399,6 @@ async function handleAction(conflict, action) {
   max-width: 100%;
 }
 
-/* 操作按钮组样式 */
 .action-buttons {
   display: flex;
   flex-wrap: wrap;
@@ -290,7 +422,6 @@ async function handleAction(conflict, action) {
   color: #64748b;
 }
 
-/* 响应式调整 */
 @media screen and (max-width: 1200px) {
   .conflicts {
     padding: 0 10px;
@@ -298,6 +429,16 @@ async function handleAction(conflict, action) {
   
   .page-title {
     font-size: 24px;
+  }
+  
+  .page-header {
+    flex-direction: column;
+    gap: 16px;
+  }
+  
+  .batch-actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 }
 
@@ -311,7 +452,6 @@ async function handleAction(conflict, action) {
   }
 }
 
-/* 表格样式优化 */
 :deep(.el-table) {
   font-size: 14px;
 }
@@ -324,14 +464,12 @@ async function handleAction(conflict, action) {
   padding: 8px 0;
 }
 
-/* 确保表格内容不被压缩 */
 :deep(.el-table .cell) {
   white-space: normal;
   word-break: break-word;
   line-height: 1.4;
 }
 
-/* 表格滚动条样式 */
 :deep(.el-table__body-wrapper) {
   overflow-x: auto;
 }
@@ -340,7 +478,6 @@ async function handleAction(conflict, action) {
   height: 100% !important;
 }
 
-/* 修复固定列与表格内容重叠 */
 :deep(.el-table__fixed-right-patch) {
   background-color: #f5f7fa;
 }

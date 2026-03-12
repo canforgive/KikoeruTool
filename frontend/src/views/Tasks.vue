@@ -45,7 +45,10 @@
         
         <el-table-column prop="source_path" label="源文件" show-overflow-tooltip min-width="250">
           <template #default="{ row }">
-            {{ getFileName(row.source_path) }}
+            <div class="source-file-cell">
+              <span class="rjcode-badge" v-if="row.rjcode">{{ row.rjcode }}</span>
+              <span class="filename">{{ getFileName(row.source_path) }}</span>
+            </div>
           </template>
         </el-table-column>
         
@@ -267,6 +270,27 @@ async function retryTask(task) {
 .metadata-section h4 {
   margin: 0 0 12px;
   font-size: 16px;
+  color: #334155;
+}
+
+.source-file-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rjcode-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background-color: #8b5cf6;
+  color: white;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  width: fit-content;
+}
+
+.filename {
   color: #334155;
 }
 </style>

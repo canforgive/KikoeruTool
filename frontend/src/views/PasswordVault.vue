@@ -330,7 +330,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { Plus, Delete, Document, Search, View, Hide, Timer, Refresh, Setting, SortDown, SortUp } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import axios from 'axios'
+import { passwordApi, cleanupApi } from '../api'
 
 const loading = ref(false)
 const passwords = ref([])
@@ -381,8 +381,7 @@ async function loadPasswords() {
     if (searchQuery.value) {
       params.search = searchQuery.value
     }
-    const response = await axios.get('/api/passwords', { params })
-    passwords.value = response.data
+    passwords.value = await passwordApi.list(params)
   } catch (error) {
     console.error('加载密码列表失败:', error)
     ElMessage.error('加载密码列表失败')
@@ -391,12 +390,10 @@ async function loadPasswords() {
   }
 }
 
-// 处理排序字段变化
 function handlePasswordSortChange() {
   loadPasswords()
 }
 
-// 切换排序方向
 function togglePasswordSortOrder() {
   passwordSortOrder.value = passwordSortOrder.value === 'desc' ? 'asc' : 'desc'
   loadPasswords()
@@ -433,7 +430,7 @@ async function handleSubmit() {
   submitting.value = true
   try {
     if (isEditing.value) {
-      await axios.put(`/api/passwords/${form.value.id}`, {
+      await passwordApi.update(form.value.id, {
         rjcode: form.value.rjcode || null,
         filename: form.value.filename || null,
         password: form.value.password,
@@ -441,7 +438,7 @@ async function handleSubmit() {
       })
       ElMessage.success('密码已更新')
     } else {
-      await axios.post('/api/passwords', {
+      await passwordApi.create({
         rjcode: form.value.rjcode || null,
         filename: form.value.filename || null,
         password: form.value.password,
@@ -473,7 +470,7 @@ async function handleDelete(row) {
       }
     )
     
-    await axios.delete(`/api/passwords/${row.id}`)
+    await passwordApi.delete(row.id)
     ElMessage.success('密码已删除')
     loadPasswords()
   } catch (error) {
@@ -497,7 +494,7 @@ async function handleBatchDelete() {
     )
     
     for (const row of selectedRows.value) {
-      await axios.delete(`/api/passwords/${row.id}`)
+      await passwordApi.delete(row.id)
     }
     
     ElMessage.success(`已删除 ${selectedRows.value.length} 个密码`)
@@ -518,20 +515,15 @@ async function handleImport() {
     return
   }
 
-  // 统计有效密码数量
-  const passwords = trimmedText.split('\n').filter(line => line.trim()).length
-  if (passwords === 0) {
+  const passwordsCount = trimmedText.split('\n').filter(line => line.trim()).length
+  if (passwordsCount === 0) {
     ElMessage.warning('请输入有效的密码')
     return
   }
 
   importing.value = true
   try {
-    const response = await axios.post('/api/passwords/import-from-text', {
-      text: trimmedText
-    })
-    
-    const { message, imported, skipped } = response.data
+    const { message, imported, skipped } = await passwordApi.importFromText(trimmedText)
     if (skipped > 0) {
       ElMessage.success(`${message}`)
     } else {
@@ -563,20 +555,32 @@ function resetForm() {
 
 function formatDate(dateStr) {
   if (!dateStr) return '-'
-  const date = new Date(dateStr)
+  // 处理不同的日期格式
+  let date
+  if (typeof dateStr === 'string') {
+    if (dateStr.includes('T')) {
+      // 如果是ISO 8601格式，它是UTC时间，添加'Z'以正确解析为本地时间
+      date = new Date(dateStr + 'Z')
+    } else {
+      date = new Date(dateStr)
+    }
+  } else {
+    date = new Date(dateStr)
+  }
   return date.toLocaleString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
   })
 }
 
 async function loadCleanupStatus() {
   try {
-    const response = await axios.get('/api/password-cleanup/status')
-    cleanupStatus.value = response.data
+    cleanupStatus.value = await cleanupApi.password.status()
   } catch (error) {
     console.error('加载清理状态失败:', error)
   }
@@ -585,10 +589,8 @@ async function loadCleanupStatus() {
 async function loadCleanupHistory() {
   cleanupLoading.value = true
   try {
-    const response = await axios.get('/api/password-cleanup/history', {
-      params: { limit: 50 }
-    })
-    cleanupHistory.value = response.data.history || []
+    const data = await cleanupApi.password.history(50)
+    cleanupHistory.value = data.history || []
   } catch (error) {
     console.error('加载清理历史失败:', error)
     ElMessage.error('加载清理历史失败')
@@ -600,15 +602,13 @@ async function loadCleanupHistory() {
 async function previewCleanup() {
   cleanupLoading.value = true
   try {
-    const response = await axios.get('/api/password-cleanup/preview')
-    const data = response.data
+    const data = await cleanupApi.password.preview()
 
     if (data.deleted_count === 0) {
       ElMessage.info('没有需要清理的密码')
       return
     }
 
-    // 显示预览对话框
     const passwordList = data.deleted_passwords.map(p =>
       `• ${p.rjcode || p.filename || '通用密码'} (${p.use_count}次使用, ${p.source})`
     ).join('\n')
@@ -624,7 +624,6 @@ async function previewCleanup() {
       }
     )
 
-    // 用户确认后执行清理
     await runCleanup()
   } catch (error) {
     if (error !== 'cancel') {
@@ -639,14 +638,12 @@ async function previewCleanup() {
 async function runCleanup() {
   cleanupLoading.value = true
   try {
-    const response = await axios.post('/api/password-cleanup/run')
-    const data = response.data
+    const data = await cleanupApi.password.run()
 
     if (data.deleted_count === 0) {
       ElMessage.info('没有需要清理的密码')
     } else {
       ElMessage.success(`成功清理 ${data.deleted_count} 个密码`)
-      // 刷新密码列表和历史记录
       loadPasswords()
       loadCleanupHistory()
     }

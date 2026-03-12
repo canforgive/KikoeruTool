@@ -45,7 +45,12 @@
           <el-icon><Folder /></el-icon>
           <span>已有文件夹</span>
         </el-menu-item>
-        
+
+        <el-menu-item index="/asmr-sync">
+          <el-icon><Download /></el-icon>
+          <span>同步下载</span>
+        </el-menu-item>
+
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
           <span>设置</span>
@@ -85,7 +90,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { Box, HomeFilled, List, WarningFilled, Setting, Document, Lock, Folder } from '@element-plus/icons-vue'
+import { Box, HomeFilled, List, WarningFilled, Setting, Document, Lock, Folder, Download } from '@element-plus/icons-vue'
 import { useWatcherStore } from './stores'
 
 // 直接定义版本号（确保每次构建都会更新）

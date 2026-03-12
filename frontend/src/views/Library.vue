@@ -213,7 +213,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { Refresh, Search, Folder } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import axios from 'axios'
+import { libraryApi } from '../api'
 
 const loading = ref(false)
 const files = ref([])
@@ -307,8 +307,8 @@ onMounted(() => {
 async function refreshLibrary() {
   loading.value = true
   try {
-    const response = await axios.get('/api/library/files')
-    files.value = response.data.files || []
+    const data = await libraryApi.listFiles()
+    files.value = data.files || []
     ElMessage.success(`已加载 ${files.value.length} 个文件`)
   } catch (error) {
     console.error('获取库文件失败:', error)
@@ -328,22 +328,33 @@ function formatFileSize(bytes) {
 
 function formatDate(dateStr) {
   if (!dateStr) return '-'
-  const date = new Date(dateStr)
+  // 处理不同的日期格式
+  let date
+  if (typeof dateStr === 'string') {
+    if (dateStr.includes('T')) {
+      // 如果是ISO 8601格式，它是UTC时间，添加'Z'以正确解析为本地时间
+      date = new Date(dateStr + 'Z')
+    } else {
+      date = new Date(dateStr)
+    }
+  } else {
+    date = new Date(dateStr)
+  }
   return date.toLocaleString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
   })
 }
 
 async function openFolder(row) {
   try {
-    const response = await axios.post('/api/library/open-folder', { path: row.path })
-    const data = response.data
+    const data = await libraryApi.openFolder(row.path)
     
-    // 如果是映射模式，显示路径映射对话框
     if (data.mode === 'mapped') {
       mappedPathInfo.value = {
         originalPath: data.original_path,
@@ -354,7 +365,6 @@ async function openFolder(row) {
       return
     }
     
-    // 直接模式，后端已成功打开
     ElMessage.success('已打开文件夹')
   } catch (error) {
     console.error('打开文件夹失败:', error)
@@ -365,23 +375,18 @@ async function openFolder(row) {
 // 直接打开文件夹（跳过弹窗）
 async function openFolderDirect(row) {
   try {
-    // 先获取映射路径
-    const response = await axios.post('/api/library/open-folder', { path: row.path })
-    const data = response.data
+    const data = await libraryApi.openFolder(row.path)
     
     let targetPath
     if (data.mode === 'mapped') {
       targetPath = data.mapped_path
     } else {
-      // 如果是直接模式，说明后端已打开
       ElMessage.success('已打开文件夹')
       return
     }
     
-    // 检查 Tampermonkey 是否可用
     const hasTampermonkey = window.kikoeruHelperLoaded || tampermonkeyLoaded.value
     
-    // 无论是否检测到，都尝试发送事件（Tampermonkey 可能已加载但未触发事件）
     console.log('[Kikoeru] 尝试直接打开:', targetPath, 'Tampermonkey状态:', hasTampermonkey)
     
     try {
@@ -389,17 +394,13 @@ async function openFolderDirect(row) {
         detail: { path: targetPath }
       }))
       
-      // 如果检测到了，显示成功消息
       if (hasTampermonkey) {
         ElMessage.success('正在打开文件夹...')
       } else {
-        // 未检测到，等待2秒看是否有反应
         ElMessage.info('正在尝试打开文件夹...')
         
-        // 延迟检查是否成功
         setTimeout(() => {
           if (!window.kikoeruHelperLoaded && !tampermonkeyLoaded.value) {
-            // 仍然没有检测到，说明可能没有安装
             showTampermonkeyDialog(targetPath)
           }
         }, 2000)
@@ -409,7 +410,6 @@ async function openFolderDirect(row) {
       console.error('[Kikoeru] 发送打开事件失败:', err)
     }
     
-    // 如果走到这里，说明发送事件失败
     showTampermonkeyDialog(targetPath)
   } catch (error) {
     console.error('直接打开失败:', error)
@@ -555,15 +555,10 @@ async function confirmRename() {
   
   isRenaming.value = true
   try {
-    await axios.post('/api/library/rename', {
-      path: renameForm.value.path,
-      new_name: renameForm.value.newName
-    })
+    await libraryApi.rename(renameForm.value.path, renameForm.value.newName)
     
     ElMessage.success('重命名成功')
     renameDialogVisible.value = false
-    
-    // 刷新列表
     await refreshLibrary()
   } catch (error) {
     console.error('重命名失败:', error)
@@ -574,7 +569,6 @@ async function confirmRename() {
 }
 
 async function apiRenameItem(row) {
-  // 确认对话框
   try {
     await ElMessageBox.confirm(
       `确定要重新获取DLsite元数据并重命名吗？\n\n当前: ${row.name}`,
@@ -586,23 +580,19 @@ async function apiRenameItem(row) {
       }
     )
   } catch {
-    return // 用户取消
+    return
   }
   
   apiRenamingId.value = row.id
   try {
-    const response = await axios.post('/api/library/api-rename', {
-      path: row.path
-    })
+    const data = await libraryApi.apiRename(row.path)
     
-    ElMessage.success(response.data.message)
+    ElMessage.success(data.message)
     
-    // 如果有新名称，显示详细信息
-    if (response.data.new_name) {
-      ElMessage.info(`新名称: ${response.data.new_name}`)
+    if (data.new_name) {
+      ElMessage.info(`新名称: ${data.new_name}`)
     }
     
-    // 刷新列表
     await refreshLibrary()
   } catch (error) {
     console.error('API重命名失败:', error)
@@ -615,19 +605,14 @@ async function apiRenameItem(row) {
 // 删除项目
 async function deleteItem(row) {
   try {
-    // 先发送预删除请求，获取确认信息
-    const response = await axios.post('/api/library/delete', {
-      path: row.path,
-      confirmed: false
-    })
+    const confirmData = await libraryApi.delete(row.path, false)
     
-    if (response.data.need_confirm) {
-      const type = response.data.type === 'folder' ? '文件夹' : '文件'
-      const size = formatFileSize(response.data.size)
+    if (confirmData.need_confirm) {
+      const type = confirmData.type === 'folder' ? '文件夹' : '文件'
+      const size = formatFileSize(confirmData.size)
       
-      // 显示确认对话框
       await ElMessageBox.confirm(
-        `确定要删除以下${type}吗？\n\n名称: ${response.data.name}\n大小: ${size}\n\n此操作不可恢复！`,
+        `确定要删除以下${type}吗？\n\n名称: ${confirmData.name}\n大小: ${size}\n\n此操作不可恢复！`,
         '删除确认',
         {
           confirmButtonText: '确定删除',
@@ -637,20 +622,14 @@ async function deleteItem(row) {
         }
       )
       
-      // 用户确认，执行删除
-      await axios.post('/api/library/delete', {
-        path: row.path,
-        confirmed: true
-      })
+      await libraryApi.delete(row.path, true)
       
       ElMessage.success('删除成功')
-      
-      // 刷新列表
       await refreshLibrary()
     }
   } catch (error) {
     if (error === 'cancel' || error?.message === 'cancel') {
-      return // 用户取消
+      return
     }
     console.error('删除失败:', error)
     ElMessage.error('删除失败: ' + (error.response?.data?.detail || error.message))

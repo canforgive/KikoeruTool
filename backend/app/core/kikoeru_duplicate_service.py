@@ -5,12 +5,13 @@ Kikoeru 服务器查重服务
 import logging
 import asyncio
 import re
+import time
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, field
 import aiohttp
 from datetime import datetime, timedelta
 
-from ..config.settings import get_config
+from ..config.settings import get_config, save_config
 from ..core.dlsite_service import get_dlsite_service
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,10 @@ class KikoeruServerConfig:
     """Kikoeru 服务器配置"""
     enabled: bool = False
     server_url: str = ""  # 例如: http://192.168.1.100:8088
-    api_token: str = ""   # 访问令牌
+    username: str = ""    # 登录用户名
+    password: str = ""    # 登录密码
+    api_token: str = ""   # API 访问令牌（自动获取）
+    token_expires: int = 0  # Token 过期时间戳
     timeout: int = 10     # 请求超时(秒)
     cache_ttl: int = 300  # 缓存时间(秒)
 
@@ -29,18 +33,24 @@ class KikoeruServerConfig:
 @dataclass
 class KikoeruCheckResult:
     """Kikoeru 服务器查重结果"""
-    is_found: bool = False           # 是否在 Kikoeru 中找到
-    rjcode: str = ""                 # 查询的RJ号
-    work_id: int = 0                 # Kikoeru 中的作品ID
-    title: str = ""                  # 作品标题
-    circle_name: str = ""            # 社团名
-    tags: List[str] = field(default_factory=list)  # 标签
-    total_count: int = 0             # 搜索结果总数
-    source: str = "kikoeru"          # 结果来源
-    checked_at: datetime = field(default_factory=datetime.now)
-    match_type: str = "exact"        # 匹配类型: exact(精确), fuzzy(模糊)
-    matched_rjcode: str = ""         # 实际匹配的RJ号（模糊匹配时使用）
-    tolerance: int = 0               # 模糊匹配的容差值
+    is_found: bool = False
+    rjcode: str = ""
+    work_id: int = 0
+    title: str = ""
+    circle_name: str = ""
+    tags: List[str] = field(default_factory=list)
+    total_count: int = 0
+    source: str = "kikoeru"
+    checked_at: datetime = None
+    match_type: str = "exact"
+    matched_rjcode: str = ""
+    tolerance: int = 0
+    
+    def __post_init__(self):
+        if self.checked_at is None:
+            self.checked_at = datetime.now()
+        if self.tags is None:
+            self.tags = []
 
 
 class KikoeruDuplicateService:
@@ -59,18 +69,19 @@ class KikoeruDuplicateService:
     def _load_config(self) -> KikoeruServerConfig:
         """从系统配置加载 Kikoeru 服务器配置"""
         config = get_config()
-        # 直接访问 Pydantic 模型的属性
         if hasattr(config, 'kikoeru_server'):
             kikoeru_config = config.kikoeru_server
             return KikoeruServerConfig(
                 enabled=kikoeru_config.enabled,
                 server_url=kikoeru_config.server_url.rstrip('/'),
+                username=kikoeru_config.username,
+                password=kikoeru_config.password,
                 api_token=kikoeru_config.api_token,
+                token_expires=kikoeru_config.token_expires,
                 timeout=kikoeru_config.timeout,
                 cache_ttl=kikoeru_config.cache_ttl
             )
         else:
-            # 如果配置不存在，返回默认配置
             return KikoeruServerConfig()
     
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -78,6 +89,110 @@ class KikoeruDuplicateService:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
+    
+    def _is_token_expired(self) -> bool:
+        """检查 Token 是否过期"""
+        if not self.config.api_token:
+            return True
+        if self.config.token_expires <= 0:
+            return True
+        now = int(time.time())
+        return now >= self.config.token_expires - 60
+    
+    async def _login(self) -> bool:
+        """通过账号密码登录获取 Token"""
+        if not self.config.username or not self.config.password:
+            logger.warning("[Kikoeru] 未配置用户名或密码，无法自动获取 Token")
+            return False
+        
+        try:
+            session = await self._get_session()
+            login_url = f"{self.config.server_url}/api/auth/me"
+            
+            logger.info(f"[Kikoeru] 正在登录: {self.config.username}")
+            logger.info(f"[Kikoeru] 登录URL: {login_url}")
+            
+            headers = {
+                'Accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            login_data = {
+                "name": self.config.username,
+                "password": self.config.password
+            }
+            
+            async with session.post(
+                login_url,
+                json=login_data,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+            ) as response:
+                logger.info(f"[Kikoeru] 登录响应状态: {response.status}")
+                content_type = response.headers.get('Content-Type', '')
+                logger.info(f"[Kikoeru] 响应Content-Type: {content_type}")
+                
+                if response.status == 200:
+                    if 'application/json' in content_type:
+                        data = await response.json()
+                        logger.info(f"[Kikoeru] 登录响应keys: {list(data.keys())}")
+                        
+                        token = data.get('token')
+                        
+                        if token:
+                            self.config.api_token = token
+                            self.config.token_expires = int(time.time()) + 86400
+                            self._save_token_to_config(token, self.config.token_expires)
+                            logger.info(f"[Kikoeru] 登录成功，Token 已保存")
+                            return True
+                        else:
+                            logger.error(f"[Kikoeru] 未找到token，可用字段: {list(data.keys())}")
+                            return False
+                    else:
+                        text = await response.text()
+                        logger.error(f"[Kikoeru] 响应非JSON: {text[:300]}")
+                        return False
+                        
+                elif response.status == 401:
+                    error_text = await response.text()
+                    logger.error(f"[Kikoeru] 登录401错误: 用户名或密码错误")
+                    return False
+                elif response.status == 422:
+                    error_text = await response.text()
+                    logger.error(f"[Kikoeru] 登录422错误: 参数格式错误 - {error_text[:300]}")
+                    return False
+                else:
+                    error_text = await response.text()
+                    logger.error(f"[Kikoeru] 登录失败 {response.status}: {error_text[:300]}")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"[Kikoeru] 登录异常: {e}")
+            return False
+    
+    def _save_token_to_config(self, token: str, expires: int):
+        """保存 Token 到配置文件"""
+        try:
+            config_to_save = {
+                'kikoeru_server': {
+                    'api_token': token,
+                    'token_expires': expires
+                }
+            }
+            save_config(config_to_save)
+            logger.info("[Kikoeru] Token 已保存到配置文件")
+        except Exception as e:
+            logger.error(f"[Kikoeru] 保存 Token 失败: {e}")
+    
+    async def _ensure_valid_token(self) -> bool:
+        """确保有有效的 Token，如果没有或过期则自动获取"""
+        if not self._is_token_expired():
+            return True
+        
+        if self.config.username and self.config.password:
+            return await self._login()
+        
+        return bool(self.config.api_token)
     
     def _get_cache(self, rjcode: str) -> Optional[KikoeruCheckResult]:
         """从缓存获取结果"""
@@ -132,23 +247,29 @@ class KikoeruDuplicateService:
         Returns:
             KikoeruCheckResult: 查重结果
         """
-        # 标准化 RJ 号
         rjcode = self._normalize_rjcode(rjcode)
         
-        # 检查缓存
         if use_cache:
             cached = self._get_cache(rjcode)
             if cached:
                 logger.debug(f"Kikoeru 查重缓存命中: {rjcode}")
                 return cached
         
-        # 检查服务是否启用
         if not self.config.enabled or not self.config.server_url:
             return KikoeruCheckResult(
                 is_found=False,
                 rjcode=rjcode,
                 source="kikoeru_disabled"
             )
+        
+        if not await self._ensure_valid_token():
+            if not self.config.api_token:
+                logger.warning("[Kikoeru] 无法获取有效 Token")
+                return KikoeruCheckResult(
+                    is_found=False,
+                    rjcode=rjcode,
+                    source="kikoeru_no_token"
+                )
         
         try:
             url = self._build_search_url(rjcode)
@@ -169,6 +290,23 @@ class KikoeruDuplicateService:
                 
                 if response.status == 401:
                     error_text = await response.text()
+                    logger.warning(f"[Kikoeru] Token 过期或无效，尝试重新登录: {rjcode}")
+                    
+                    if self.config.username and self.config.password:
+                        if await self._login():
+                            headers = self._get_headers()
+                            async with session.get(
+                                url, 
+                                headers=headers, 
+                                timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+                            ) as retry_response:
+                                if retry_response.status == 200:
+                                    data = await retry_response.json()
+                                    result = self._parse_search_result(rjcode, data)
+                                    if use_cache:
+                                        self._set_cache(rjcode, result)
+                                    return result
+                    
                     logger.error(f"[Kikoeru] 认证失败: {rjcode}")
                     logger.error(f"[Kikoeru] 响应内容: {error_text[:500]}")
                     return KikoeruCheckResult(
@@ -192,7 +330,6 @@ class KikoeruDuplicateService:
                 
                 result = self._parse_search_result(rjcode, data)
                 
-                # 如果精确匹配未找到，尝试宽容搜索（RJ号±1）
                 if not result.is_found:
                     logger.info(f"[Kikoeru] 精确匹配未找到，尝试宽容搜索（±1）")
                     fuzzy_result = await self._check_fuzzy(rjcode, session, headers, use_cache)
@@ -200,7 +337,6 @@ class KikoeruDuplicateService:
                         logger.info(f"[Kikoeru] ✓ 宽容匹配成功: {rjcode} -> {fuzzy_result.matched_rjcode}")
                         return fuzzy_result
                 
-                # 缓存结果
                 if use_cache:
                     self._set_cache(rjcode, result)
                 
@@ -418,7 +554,14 @@ class KikoeruDuplicateService:
         start_time = datetime.now()
         
         try:
-            # 使用一个常见的 RJ 号进行测试
+            if not await self._ensure_valid_token():
+                if not self.config.api_token:
+                    return {
+                        'success': False,
+                        'message': '无法获取有效的认证 Token，请检查用户名和密码',
+                        'latency': 0
+                    }
+            
             test_rjcode = "RJ123456"
             url = self._build_search_url(test_rjcode)
             headers = self._get_headers()
@@ -442,7 +585,7 @@ class KikoeruDuplicateService:
                 elif response.status == 401:
                     return {
                         'success': False,
-                        'message': '认证失败，请检查 API Token',
+                        'message': '认证失败，请检查用户名和密码',
                         'latency': latency,
                         'status_code': response.status
                     }

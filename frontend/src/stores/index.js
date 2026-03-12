@@ -1,8 +1,6 @@
 import { defineStore } from 'pinia'
-import axios from 'axios'
 import { ElMessage } from 'element-plus'
-
-const API_BASE = '/api'
+import { taskApi, configApi, watcherApi } from '../api'
 
 export const useTaskStore = defineStore('tasks', {
   state: () => ({
@@ -10,22 +8,20 @@ export const useTaskStore = defineStore('tasks', {
     currentTask: null,
     loading: false
   }),
-  
+
   getters: {
     pendingTasks: (state) => state.tasks.filter(t => t.status === 'pending'),
     processingTasks: (state) => state.tasks.filter(t => t.status === 'processing'),
     completedTasks: (state) => state.tasks.filter(t => t.status === 'completed' || t.status === 'failed')
   },
-  
+
   actions: {
     async fetchTasks(status = null, showLoading = true) {
       try {
         if (showLoading) {
           this.loading = true
         }
-        const params = status ? { status } : {}
-        const response = await axios.get(`${API_BASE}/tasks`, { params })
-        this.tasks = response.data
+        this.tasks = await taskApi.list(status)
       } catch (error) {
         console.error('获取任务失败:', error)
         throw error
@@ -35,30 +31,20 @@ export const useTaskStore = defineStore('tasks', {
         }
       }
     },
-    
+
     async createTask(sourcePath, taskType = 'auto_process', autoClassify = true) {
       try {
-        const response = await axios.post(`${API_BASE}/tasks`, {
-          source_path: sourcePath,
-          task_type: taskType,
-          auto_classify: autoClassify
-        }, {
-          headers: {
-            'Content-Type': 'application/json; charset=utf-8'
-          }
-        })
-        return response.data
+        return await taskApi.create(sourcePath, taskType, autoClassify)
       } catch (error) {
         console.error('创建任务失败:', error)
         throw error
       }
     },
-    
+
     async pauseTask(taskId) {
       try {
-        await axios.post(`${API_BASE}/tasks/${taskId}/pause`)
+        await taskApi.pause(taskId)
         ElMessage.success('任务已暂停')
-        // 延迟刷新以确保状态已更新
         setTimeout(() => this.fetchTasks(), 500)
       } catch (error) {
         console.error('暂停任务失败:', error)
@@ -66,12 +52,11 @@ export const useTaskStore = defineStore('tasks', {
         throw error
       }
     },
-    
+
     async resumeTask(taskId) {
       try {
-        await axios.post(`${API_BASE}/tasks/${taskId}/resume`)
+        await taskApi.resume(taskId)
         ElMessage.success('任务已恢复')
-        // 延迟刷新以确保状态已更新
         setTimeout(() => this.fetchTasks(), 500)
       } catch (error) {
         console.error('恢复任务失败:', error)
@@ -79,12 +64,11 @@ export const useTaskStore = defineStore('tasks', {
         throw error
       }
     },
-    
+
     async cancelTask(taskId) {
       try {
-        await axios.post(`${API_BASE}/tasks/${taskId}/cancel`)
+        await taskApi.cancel(taskId)
         ElMessage.success('任务已取消')
-        // 延迟刷新以确保状态已更新
         setTimeout(() => this.fetchTasks(), 500)
       } catch (error) {
         console.error('取消任务失败:', error)
@@ -100,15 +84,28 @@ export const useConfigStore = defineStore('config', {
     config: null,
     loading: false
   }),
-  
+
   actions: {
     async fetchConfig() {
       try {
         this.loading = true
-        const response = await axios.get(`${API_BASE}/config`)
-        this.config = response.data
+        this.config = await configApi.get()
       } catch (error) {
         console.error('获取配置失败:', error)
+        throw error
+      } finally {
+        this.loading = false
+      }
+    },
+
+    async saveConfig(configData) {
+      try {
+        this.loading = true
+        const result = await configApi.save(configData)
+        this.config = result.config || configData
+        return result
+      } catch (error) {
+        console.error('保存配置失败:', error)
         throw error
       } finally {
         this.loading = false
@@ -125,30 +122,29 @@ export const useWatcherStore = defineStore('watcher', {
       pending_files: []
     }
   }),
-  
+
   actions: {
     async fetchStatus() {
       try {
-        const response = await axios.get(`${API_BASE}/watcher/status`)
-        this.status = response.data
+        this.status = await watcherApi.status()
       } catch (error) {
         console.error('获取监视器状态失败:', error)
       }
     },
-    
+
     async start() {
       try {
-        await axios.post(`${API_BASE}/watcher/start`)
+        await watcherApi.start()
         await this.fetchStatus()
       } catch (error) {
         console.error('启动监视器失败:', error)
         throw error
       }
     },
-    
+
     async stop() {
       try {
-        await axios.post(`${API_BASE}/watcher/stop`)
+        await watcherApi.stop()
         await this.fetchStatus()
       } catch (error) {
         console.error('停止监视器失败:', error)

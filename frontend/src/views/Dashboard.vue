@@ -290,8 +290,8 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { Document, Loading, CircleCheck, Warning, Search, VideoPlay, VideoPause, Refresh, SortDown, SortUp } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import axios from 'axios'
 import { useTaskStore } from '../stores'
+import { conflictApi, scanApi, watcherApi, processedArchiveApi } from '../api'
 import FileUploader from '../components/FileUploader.vue'
 
 const taskStore = useTaskStore()
@@ -440,8 +440,8 @@ async function refreshData() {
   // 获取问题作品数量
   let conflictCount = 0
   try {
-    const response = await axios.get('/api/conflicts')
-    conflictCount = response.data.conflicts?.length || 0
+    const data = await conflictApi.list()
+    conflictCount = data.conflicts?.length || 0
   } catch (error) {
     console.error('获取问题作品数量失败:', error)
   }
@@ -515,11 +515,8 @@ async function handleManualScan() {
   scanning.value = true
   try {
     ElMessage.info('正在扫描文件夹...')
-    
-    // 调用后端API扫描文件夹
-    const response = await axios.post('/api/scan')
-    
-    ElMessage.success(response.data.message)
+    const data = await scanApi.scan()
+    ElMessage.success(data.message)
     await refreshData()
   } catch (error) {
     console.error('扫描失败:', error)
@@ -532,13 +529,11 @@ async function handleManualScan() {
 async function handleWatcherToggle() {
   try {
     if (watcherRunning.value) {
-      // 停止监视器
-      await axios.post('/api/watcher/stop')
+      await watcherApi.stop()
       ElMessage.success('监视器已停止')
       watcherRunning.value = false
     } else {
-      // 启动监视器
-      await axios.post('/api/watcher/start')
+      await watcherApi.start()
       ElMessage.success('监视器已启动')
       watcherRunning.value = true
     }
@@ -550,8 +545,8 @@ async function handleWatcherToggle() {
 
 async function fetchWatcherStatus() {
   try {
-    const response = await axios.get('/api/watcher/status')
-    watcherRunning.value = response.data.is_running
+    const data = await watcherApi.status()
+    watcherRunning.value = data.is_running
   } catch (error) {
     console.error('获取监视器状态失败:', error)
   }
@@ -561,28 +556,17 @@ async function fetchWatcherStatus() {
 async function fetchProcessedArchives() {
   archivesLoading.value = true
   try {
-    // 先触发目录扫描
-    await axios.post('/api/processed-archives/scan')
-    // 然后获取最新列表，带上排序和搜索参数
-    // 添加时间戳防止缓存
+    await processedArchiveApi.scan()
     const params = {
       sort_by: archiveSortBy.value,
-      sort_order: archiveSortOrder.value,
-      _t: Date.now()  // 添加时间戳防止浏览器缓存
+      sort_order: archiveSortOrder.value
     }
     if (archiveSearchQuery.value) {
       params.search = archiveSearchQuery.value
     }
-    const response = await axios.get('/api/processed-archives', { 
-      params,
-      headers: {
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache'
-      }
-    })
-    archives.value = response.data.archives || []
+    const data = await processedArchiveApi.list(params)
+    archives.value = data.archives || []
     console.log('获取到已处理压缩包:', archives.value.length, '条记录')
-    // 打印第一条记录的时间，用于调试
     if (archives.value.length > 0) {
       console.log('第一条记录:', archives.value[0].filename, '时间:', archives.value[0].processed_at)
     }
@@ -620,11 +604,9 @@ function toggleArchiveSortOrder() {
 async function reprocessArchive(archiveId) {
   reprocessingId.value = archiveId
   try {
-    const response = await axios.post(`/api/processed-archives/${archiveId}/reprocess`)
-    ElMessage.success(response.data.message)
-    // 刷新任务列表
+    const data = await processedArchiveApi.reprocess(archiveId)
+    ElMessage.success(data.message)
     await refreshData()
-    // 刷新归档列表
     await fetchProcessedArchives()
   } catch (error) {
     console.error('重新处理失败:', error)
@@ -646,13 +628,26 @@ function formatFileSize(bytes) {
 // 格式化日期
 function formatDate(dateString) {
   if (!dateString) return '-'
-  const date = new Date(dateString)
+  // 处理不同的日期格式
+  let date
+  if (typeof dateString === 'string') {
+    if (dateString.includes('T')) {
+      // 如果是ISO 8601格式，它是UTC时间，添加'Z'以正确解析为本地时间
+      date = new Date(dateString + 'Z')
+    } else {
+      date = new Date(dateString)
+    }
+  } else {
+    date = new Date(dateString)
+  }
   return date.toLocaleString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
   })
 }
 </script>

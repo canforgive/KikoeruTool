@@ -1,7 +1,7 @@
 import os
 import yaml
 import logging
-from typing import Optional
+from typing import Optional, List, List
 from pydantic import BaseModel, root_validator
 
 class StorageConfig(BaseModel):
@@ -11,6 +11,7 @@ class StorageConfig(BaseModel):
     library_path: str = "/library"
     processed_archives_path: str = "/processed"
     existing_folders_path: str = "/existing"  # 已存在文件夹目录（非软件解压的文件夹）
+    asmr_subtitle_path: str = ""  # ASMR同步字幕文件夹路径
 
 class ClassificationRule(BaseModel):
     """分类规则"""
@@ -111,6 +112,8 @@ class ProcessedArchiveCleanupConfig(BaseModel):
     max_size_gb: float = 50.0  # 最大占用空间(GB)，超过此容量删除最旧的
     # 其他选项
     exclude_reprocessing: bool = True  # 是否排除正在重新处理的压缩包
+    # 启动扫描配置
+    scan_on_startup: bool = True  # 启动时是否扫描已处理压缩包目录
 
 class PathMappingRule(BaseModel):
     """路径映射规则"""
@@ -129,9 +132,38 @@ class KikoeruServerConfig(BaseModel):
     """Kikoeru 服务器查重配置"""
     enabled: bool = False  # 是否启用 Kikoeru 服务器查重
     server_url: str = ""   # Kikoeru 服务器地址，如 http://192.168.1.100:8088
-    api_token: str = ""    # API 访问令牌
+    username: str = ""     # 登录用户名
+    password: str = ""     # 登录密码
+    api_token: str = ""    # API 访问令牌（自动获取）
+    token_expires: int = 0 # Token 过期时间戳
     timeout: int = 10      # 请求超时(秒)
     cache_ttl: int = 300   # 缓存时间(秒)
+
+class ASMRSyncConfig(BaseModel):
+    """ASMR 同步下载配置"""
+    enabled: bool = True
+    api_base_url: str = "https://api.asmr-200.com/api"
+    max_concurrent_downloads: int = 3
+    http_proxy: Optional[str] = None
+    retry_interval_hours: float = 1.0# 重试间隔（小时）
+    max_retry_count: int = 10  # 最大重试次数
+    retry_cron: str = "0 */1 * * *"# 重试cron表达式（默认每小时执行一次）
+    retry_count: int = 3
+    retry_delay: int = 5
+    # LRC广告清理配置
+    lrc_clean_enabled: bool = True  # 是否启用LRC广告清理
+    lrc_clean_patterns: List[str] = [  # 自定义清理规则（正则表达式）
+        r'@[\w]{3,}',  # Telegram账号
+        r'Telegram',
+        r'telegram',
+        r'电报',
+        r'tg群',
+        r'TG群',
+        r'QQ群[：:]\s*\d+',
+        r'群号[：:]\s*\d+',
+    ]
+    # 字幕繁简转换配置
+    simplify_chinese_enabled: bool = True  # 是否启用字幕繁体转简体
 
 class AppConfig(BaseModel):
     """应用配置"""
@@ -143,8 +175,8 @@ class AppConfig(BaseModel):
         enabled=True,
         filter_dir=True,
         rules=[
-            FilterRule(name="过滤无SE的WAV文件", pattern="(?:SE|音|音效)(?:[な無]し|CUT).*\.WAV$", target="file", action="exclude", enabled=True),
-            FilterRule(name="过滤MP3文件", pattern="\.mp3$", target="file", action="exclude", enabled=False),
+            FilterRule(name="过滤无SE的WAV文件", pattern=r"(?:SE|音|音效)(?:[な無]し|CUT).*\.WAV$", target="file", action="exclude", enabled=True),
+            FilterRule(name="过滤MP3文件", pattern=r"\.mp3$", target="file", action="exclude", enabled=False),
         ]
     )
     metadata: MetadataConfig = MetadataConfig()
@@ -156,6 +188,7 @@ class AppConfig(BaseModel):
     processed_archive_cleanup: ProcessedArchiveCleanupConfig = ProcessedArchiveCleanupConfig()
     path_mapping: PathMappingConfig = PathMappingConfig()
     kikoeru_server: KikoeruServerConfig = KikoeruServerConfig()
+    asmr_sync: ASMRSyncConfig = ASMRSyncConfig()
 
 # 全局配置实例
 _config: Optional[AppConfig] = None
@@ -164,7 +197,7 @@ def load_config(config_path: str = None) -> AppConfig:
     """加载配置"""
     global _config
     logger = logging.getLogger(__name__)
-    
+
     if config_path is None:
         # 优先从环境变量读取配置路径
         env_config_path = os.environ.get('CONFIG_PATH')
@@ -177,9 +210,10 @@ def load_config(config_path: str = None) -> AppConfig:
             # 从 backend/app/config/settings.py 到项目根目录
             project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
             config_path = os.path.join(project_root, 'config', 'config.yaml')
-    
-    logger.info(f"加载配置文件: {config_path}")
-    
+
+    logger.info(f"[CONFIG] 尝试加载配置文件: {config_path}")
+    logger.info(f"[CONFIG] 配置文件是否存在: {os.path.exists(config_path)}")
+
     if os.path.exists(config_path):
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
@@ -306,6 +340,10 @@ def load_config(config_path: str = None) -> AppConfig:
 
             _config = AppConfig(**config_data)
             logger.info(f"[CONFIG] 加载后 template = '{_config.rename.template}'")
+            logger.info(f"[CONFIG] storage.input_path = '{_config.storage.input_path}'")
+            logger.info(f"[CONFIG] storage.library_path = '{_config.storage.library_path}'")
+            logger.info(f"[CONFIG] storage.temp_path = '{_config.storage.temp_path}'")
+            logger.info(f"[CONFIG] storage.processed_archives_path = '{_config.storage.processed_archives_path}'")
             logger.info(f"AppConfig 创建成功")
             logger.info(f"AppConfig 中的 classification: {_config.classification}")
             logger.info(f"AppConfig 中的 classification 数量: {len(_config.classification)}")
