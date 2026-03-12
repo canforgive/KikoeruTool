@@ -17,9 +17,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 安装系统依赖（包括 7zip）
+# 安装系统依赖（包括 7zip 和 opencc）
 RUN apt-get update && apt-get install -y \
     p7zip-full \
+    libopencc-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制后端依赖
