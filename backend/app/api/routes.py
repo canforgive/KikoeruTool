@@ -3010,23 +3010,23 @@ async def test_kikoeru_server_connection():
 
 @app.post("/api/kikoeru-server/check")
 async def check_kikoeru_duplicate(
-    rjcode: str, 
+    rjcode: str,
     check_linkages: bool = True,
-    cue_languages: str = "CHI_HANS CHI_HANT ENG"
+    cue_languages: str = "CHI_HANS CHI_HANT ENG JPN"
 ):
     """检查作品及其关联作品是否在 Kikoeru 服务器中
-    
+
     Args:
         rjcode: RJ号
         check_linkages: 是否检查关联作品
-        cue_languages: 语言列表，空格分隔（如 'CHI_HANS CHI_HANT ENG'）
+        cue_languages: 语言列表，空格分隔（如 'CHI_HANS CHI_HANT ENG JPN'）
     """
     logger.info(f"=" * 60)
     logger.info(f"[Kikoeru查重] 开始查询: {rjcode}, check_linkages={check_linkages}")
-    
+
     try:
         # 解析语言列表
-        lang_list = cue_languages.split() if cue_languages else ["CHI_HANS", "CHI_HANT", "ENG"]
+        lang_list = cue_languages.split() if cue_languages else ["CHI_HANS", "CHI_HANT", "ENG", "JPN"]
         logger.info(f"[Kikoeru查重] 检查语言: {lang_list}")
         
         service = get_kikoeru_service()
