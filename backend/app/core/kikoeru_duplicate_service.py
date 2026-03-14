@@ -612,27 +612,38 @@ class KikoeruDuplicateService:
                 'latency': latency
             }
     
+    def _normalize_lang_code(self, lang: str) -> str:
+        """将 DLsite 语言代码转换为标准格式"""
+        lang_map = {
+            'JPN': 'JPN',
+            'CHN': 'CHI_HANS',  # 简体中文
+            'TWN': 'CHI_HANT',  # 繁体中文
+            'ENG': 'ENG',
+            'KOR': 'KOR',
+        }
+        return lang_map.get(lang.upper(), lang.upper())
+
     async def check_duplicate_with_linkages(
-        self, 
+        self,
         rjcode: str,
         cue_languages: List[str] = None,
         use_cache: bool = True
     ) -> Dict[str, KikoeruCheckResult]:
         """
         检查作品及其关联作品是否在 Kikoeru 服务器中
-        
+
         只查询直接关联的作品（原作、翻译版），避免递归查询过多无关作品
-        
+
         Args:
             rjcode: RJ号
-            cue_languages: 需要检查的语言列表
+            cue_languages: 需要检查的语言列表（支持 CHI_HANS/CHN, CHI_HANT/TWN, ENG, JPN 等）
             use_cache: 是否使用缓存
-        
+
         Returns:
             Dict[str, KikoeruCheckResult]: 所有关联作品及其查重结果
         """
         if cue_languages is None:
-            cue_languages = ['CHI_HANS', 'CHI_HANT', 'ENG']
+            cue_languages = ['CHI_HANS', 'CHI_HANT', 'ENG', 'JPN']
         
         results = {}
         
@@ -655,8 +666,13 @@ class KikoeruDuplicateService:
                 # 3. 筛选需要查询的语言版本（只查询 cue_languages 中指定的语言）
                 linked_rjcodes = []
                 for workno, work_info in linked_works.items():
-                    if workno != rjcode and work_info.lang in cue_languages:
-                        linked_rjcodes.append(workno)
+                    if workno != rjcode:
+                        # 转换语言代码并检查
+                        normalized_lang = self._normalize_lang_code(work_info.lang)
+                        if normalized_lang in cue_languages or work_info.lang in cue_languages:
+                            linked_rjcodes.append(workno)
+                        else:
+                            logger.debug(f"[Kikoeru关联查询] 跳过 {workno}，语言 {work_info.lang}({normalized_lang}) 不在目标列表中")
                 
                 if linked_rjcodes:
                     logger.info(f"[Kikoeru关联查询] 将查询 {len(linked_rjcodes)} 个关联作品（语言匹配）: {linked_rjcodes}")

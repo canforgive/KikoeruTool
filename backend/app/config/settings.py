@@ -165,6 +165,33 @@ class ASMRSyncConfig(BaseModel):
     # 字幕繁简转换配置
     simplify_chinese_enabled: bool = True  # 是否启用字幕繁体转简体
 
+class AutoProcessConfig(BaseModel):
+    """正常解压缩流程步骤配置"""
+    check_duplicate: bool = True  # 预检重复
+    extract: bool = True  # 解压（不建议关闭）
+    fetch_metadata: bool = True  # 获取元数据
+    rename: bool = True  # 重命名
+    filter: bool = True  # 过滤
+    classify: bool = True  # 智能分类
+    archive: bool = True  # 归档压缩包
+
+class ProcessExistingFolderConfig(BaseModel):
+    """已有文件夹处理流程步骤配置"""
+    check_duplicate: bool = True  # 预检重复
+    fetch_metadata: bool = True  # 获取元数据
+    rename: bool = True  # 重命名
+    filter: bool = True  # 过滤
+    import_lrc: bool = True  # LRC导入
+    classify: bool = True  # 智能分类
+
+class ASMRSyncStepConfig(BaseModel):
+    """ASMR同步下载流程步骤配置"""
+    download: bool = True  # 下载文件（不建议关闭）
+    sync_subtitle: bool = True  # 同步字幕
+    rename: bool = True  # 重命名
+    classify: bool = True  # 智能分类
+    move_subtitle_folder: bool = True  # 移动字幕文件夹
+
 class AppConfig(BaseModel):
     """应用配置"""
     storage: StorageConfig = StorageConfig()
@@ -189,6 +216,9 @@ class AppConfig(BaseModel):
     path_mapping: PathMappingConfig = PathMappingConfig()
     kikoeru_server: KikoeruServerConfig = KikoeruServerConfig()
     asmr_sync: ASMRSyncConfig = ASMRSyncConfig()
+    auto_process: AutoProcessConfig = AutoProcessConfig()
+    process_existing: ProcessExistingFolderConfig = ProcessExistingFolderConfig()
+    asmr_sync_step: ASMRSyncStepConfig = ASMRSyncStepConfig()
 
 # 全局配置实例
 _config: Optional[AppConfig] = None
@@ -337,6 +367,81 @@ def load_config(config_path: str = None) -> AppConfig:
                     config_data['processed_archive_cleanup']['max_size_gb'] = 50
                 if 'exclude_reprocessing' not in config_data['processed_archive_cleanup']:
                     config_data['processed_archive_cleanup']['exclude_reprocessing'] = True
+
+            # 确保 auto_process 配置完整（兼容旧配置）
+            if 'auto_process' not in config_data or not config_data['auto_process']:
+                config_data['auto_process'] = {
+                    'check_duplicate': True,
+                    'extract': True,
+                    'fetch_metadata': True,
+                    'rename': True,
+                    'filter': True,
+                    'classify': True,
+                    'archive': True
+                }
+                logger.info("添加缺失的 auto_process 配置，使用默认值")
+            else:
+                # 确保所有字段都存在
+                defaults = {
+                    'check_duplicate': True,
+                    'extract': True,
+                    'fetch_metadata': True,
+                    'rename': True,
+                    'filter': True,
+                    'classify': True,
+                    'archive': True
+                }
+                for key, value in defaults.items():
+                    if key not in config_data['auto_process']:
+                        config_data['auto_process'][key] = value
+
+            # 确保 process_existing 配置完整（兼容旧配置）
+            if 'process_existing' not in config_data or not config_data['process_existing']:
+                config_data['process_existing'] = {
+                    'check_duplicate': True,
+                    'fetch_metadata': True,
+                    'rename': True,
+                    'filter': True,
+                    'import_lrc': True,
+                    'classify': True
+                }
+                logger.info("添加缺失的 process_existing 配置，使用默认值")
+            else:
+                # 确保所有字段都存在
+                defaults = {
+                    'check_duplicate': True,
+                    'fetch_metadata': True,
+                    'rename': True,
+                    'filter': True,
+                    'import_lrc': True,
+                    'classify': True
+                }
+                for key, value in defaults.items():
+                    if key not in config_data['process_existing']:
+                        config_data['process_existing'][key] = value
+
+            # 确保 asmr_sync_step 配置完整（兼容旧配置）
+            if 'asmr_sync_step' not in config_data or not config_data['asmr_sync_step']:
+                config_data['asmr_sync_step'] = {
+                    'download': True,
+                    'sync_subtitle': True,
+                    'rename': True,
+                    'classify': True,
+                    'move_subtitle_folder': True
+                }
+                logger.info("添加缺失的 asmr_sync_step 配置，使用默认值")
+            else:
+                # 确保所有字段都存在
+                defaults = {
+                    'download': True,
+                    'sync_subtitle': True,
+                    'rename': True,
+                    'classify': True,
+                    'move_subtitle_folder': True
+                }
+                for key, value in defaults.items():
+                    if key not in config_data['asmr_sync_step']:
+                        config_data['asmr_sync_step'][key] = value
 
             _config = AppConfig(**config_data)
             logger.info(f"[CONFIG] 加载后 template = '{_config.rename.template}'")

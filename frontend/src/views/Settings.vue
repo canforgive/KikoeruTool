@@ -1139,6 +1139,193 @@
         </el-form>
       </el-card>
 
+      <!-- 正常解压缩流程步骤开关 -->
+      <el-card class="setting-card">
+        <template #header>
+          <div class="card-header">
+            <span>正常解压缩流程步骤</span>
+          </div>
+        </template>
+
+        <el-alert
+          title="步骤开关说明"
+          type="info"
+          :closable="false"
+          style="margin-bottom: 15px;"
+        >
+          <div style="font-size: 12px; line-height: 1.6;">
+            <p>控制正常解压缩流程中各步骤的执行。关闭某步骤后，该步骤将被跳过。</p>
+            <p><strong>注意：</strong>关闭"解压"步骤可能导致任务失败，不建议关闭。</p>
+          </div>
+        </el-alert>
+
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="预检重复">
+              <el-switch v-model="config.auto_process.check_duplicate" />
+              <div class="form-tip">检查作品是否已存在于库存中</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="解压">
+              <el-switch v-model="config.auto_process.extract" />
+              <div class="form-tip" style="color: #f56c6c;">不建议关闭</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="获取元数据">
+              <el-switch v-model="config.auto_process.fetch_metadata" />
+              <div class="form-tip">从DLsite获取作品信息</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="重命名">
+              <el-switch v-model="config.auto_process.rename" />
+              <div class="form-tip">按模板重命名文件夹</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="过滤">
+              <el-switch v-model="config.auto_process.filter" />
+              <div class="form-tip">应用过滤规则</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="智能分类">
+              <el-switch v-model="config.auto_process.classify" />
+              <div class="form-tip">按规则分类到子目录</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="归档压缩包">
+              <el-switch v-model="config.auto_process.archive" />
+              <div class="form-tip">将压缩包移动到归档目录</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+      </el-card>
+
+      <!-- 已有文件夹处理流程步骤开关 -->
+      <el-card class="setting-card">
+        <template #header>
+          <div class="card-header">
+            <span>已有文件夹处理流程步骤</span>
+          </div>
+        </template>
+
+        <el-alert
+          title="步骤开关说明"
+          type="info"
+          :closable="false"
+          style="margin-bottom: 15px;"
+        >
+          <div style="font-size: 12px; line-height: 1.6;">
+            <p>控制已有文件夹处理流程中各步骤的执行。此流程用于处理已解压的文件夹（跳过解压步骤）。</p>
+          </div>
+        </el-alert>
+
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="预检重复">
+              <el-switch v-model="config.process_existing.check_duplicate" />
+              <div class="form-tip">检查作品是否已存在</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="获取元数据">
+              <el-switch v-model="config.process_existing.fetch_metadata" />
+              <div class="form-tip">从DLsite获取作品信息</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="重命名">
+              <el-switch v-model="config.process_existing.rename" />
+              <div class="form-tip">按模板重命名文件夹</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="过滤">
+              <el-switch v-model="config.process_existing.filter" />
+              <div class="form-tip">应用过滤规则</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="LRC导入">
+              <el-switch v-model="config.process_existing.import_lrc" />
+              <div class="form-tip">从字幕文件夹导入LRC字幕</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="智能分类">
+              <el-switch v-model="config.process_existing.classify" />
+              <div class="form-tip">按规则分类到子目录</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+      </el-card>
+
+      <!-- ASMR同步下载流程步骤开关 -->
+      <el-card class="setting-card">
+        <template #header>
+          <div class="card-header">
+            <span>ASMR同步下载流程步骤</span>
+          </div>
+        </template>
+
+        <el-alert
+          title="步骤开关说明"
+          type="info"
+          :closable="false"
+          style="margin-bottom: 15px;"
+        >
+          <div style="font-size: 12px; line-height: 1.6;">
+            <p>控制ASMR同步下载流程中各步骤的执行。</p>
+            <p><strong>注意：</strong>LRC广告清理和繁简转换在"ASMR同步下载"配置中设置。</p>
+          </div>
+        </el-alert>
+
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="下载文件">
+              <el-switch v-model="config.asmr_sync_step.download" />
+              <div class="form-tip" style="color: #f56c6c;">不建议关闭</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="同步字幕">
+              <el-switch v-model="config.asmr_sync_step.sync_subtitle" />
+              <div class="form-tip">将字幕文件同步到下载目录</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="重命名">
+              <el-switch v-model="config.asmr_sync_step.rename" />
+              <div class="form-tip">按模板重命名文件夹</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="智能分类">
+              <el-switch v-model="config.asmr_sync_step.classify" />
+              <div class="form-tip">按规则分类到子目录</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="移动字幕文件夹">
+              <el-switch v-model="config.asmr_sync_step.move_subtitle_folder" />
+              <div class="form-tip">完成后移动字幕文件夹到Finished目录</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+      </el-card>
+
       <!-- 分类规则 -->
       <el-card class="setting-card">
         <template #header>
@@ -1412,6 +1599,30 @@ const defaultConfig = {
       '群号[：:]\\s*\\d+'
     ],
     simplify_chinese_enabled: true
+  },
+  auto_process: {
+    check_duplicate: true,
+    extract: true,
+    fetch_metadata: true,
+    rename: true,
+    filter: true,
+    classify: true,
+    archive: true
+  },
+  process_existing: {
+    check_duplicate: true,
+    fetch_metadata: true,
+    rename: true,
+    filter: true,
+    import_lrc: true,
+    classify: true
+  },
+  asmr_sync_step: {
+    download: true,
+    sync_subtitle: true,
+    rename: true,
+    classify: true,
+    move_subtitle_folder: true
   }
 }
 
@@ -1642,6 +1853,84 @@ async function loadConfig() {
       }
       if (mergedConfig.kikoeru_server.cache_ttl === undefined) {
         mergedConfig.kikoeru_server.cache_ttl = 300
+      }
+
+      // 确保 auto_process 配置完整
+      if (!mergedConfig.auto_process) {
+        mergedConfig.auto_process = {
+          check_duplicate: true,
+          extract: true,
+          fetch_metadata: true,
+          rename: true,
+          filter: true,
+          classify: true,
+          archive: true
+        }
+      }
+      // 确保 auto_process 的字段都存在
+      const autoProcessDefaults = {
+        check_duplicate: true,
+        extract: true,
+        fetch_metadata: true,
+        rename: true,
+        filter: true,
+        classify: true,
+        archive: true
+      }
+      for (const key in autoProcessDefaults) {
+        if (mergedConfig.auto_process[key] === undefined) {
+          mergedConfig.auto_process[key] = autoProcessDefaults[key]
+        }
+      }
+
+      // 确保 process_existing 配置完整
+      if (!mergedConfig.process_existing) {
+        mergedConfig.process_existing = {
+          check_duplicate: true,
+          fetch_metadata: true,
+          rename: true,
+          filter: true,
+          import_lrc: true,
+          classify: true
+        }
+      }
+      // 确保 process_existing 的字段都存在
+      const processExistingDefaults = {
+        check_duplicate: true,
+        fetch_metadata: true,
+        rename: true,
+        filter: true,
+        import_lrc: true,
+        classify: true
+      }
+      for (const key in processExistingDefaults) {
+        if (mergedConfig.process_existing[key] === undefined) {
+          mergedConfig.process_existing[key] = processExistingDefaults[key]
+        }
+      }
+
+      // 确保 asmr_sync_step 配置完整
+      if (!mergedConfig.asmr_sync_step) {
+        mergedConfig.asmr_sync_step = {
+          download: true,
+          sync_subtitle: true,
+          rename: true,
+          classify: true,
+          move_subtitle_folder: true
+        }
+      }
+      // 确保 asmr_sync_step 的字段都存在
+      const asmrSyncStepDefaults = {
+        download: true,
+        sync_subtitle: true,
+        rename: true,
+        classify: true,
+        move_subtitle_folder: true
+      }
+      for (const key in asmrSyncStepDefaults) {
+        if (mergedConfig.asmr_sync_step[key] === undefined) {
+          mergedConfig.asmr_sync_step[key] = asmrSyncStepDefaults[key]
+        }
       }
 
       config.value = mergedConfig

@@ -1148,17 +1148,41 @@ class ExtractService:
         finally:
             db.close()
     
+    def _get_rj_passwords(self, archive_path: str) -> List[str]:
+        """从压缩包路径提取RJ号并生成密码列表
+
+        返回顺序: RJ号, RJ号+1, RJ号-1
+        例如: 对于RJ123456，返回 ['RJ123456', 'RJ123457', 'RJ123455']
+        """
+        passwords = []
+        # 从文件名中提取RJ号 (例如: RJ123456)
+        filename = os.path.basename(archive_path)
+        # 匹配 RJ 后跟 6-8 位数字
+        match = re.search(r'RJ(\d{6,8})', filename, re.IGNORECASE)
+        if match:
+            rj_number = int(match.group(1))
+            rj_code = f"RJ{rj_number}"
+            rj_plus_one = f"RJ{rj_number + 1}"
+            rj_minus_one = f"RJ{rj_number - 1}"
+            passwords = [rj_code, rj_plus_one, rj_minus_one]
+            logger.debug(f"从文件名提取RJ号生成密码: {passwords}")
+        return passwords
+
     async def _get_archive_info(self, archive_path: str) -> Optional[ArchiveInfo]:
         """获取压缩包信息（文件列表、大小等）
-        
+
         注意：这里只获取文件列表，不解压。真正能解压的密码在 _try_extract 中确定。
         为了不限制解压时的密码选择，这里尝试找一个能读取内容的密码即可。
         """
         # 从密码库查找所有相关密码
         vault_passwords = await self._get_passwords_for_archive(archive_path)
-        
-        # 构建密码列表：密码库密码优先，然后是配置中的默认密码
+
+        # 获取RJ号相关密码
+        rj_passwords = self._get_rj_passwords(archive_path)
+
+        # 构建密码列表：RJ号密码优先，然后密码库密码，最后是配置中的默认密码
         password_list = []
+        password_list.extend(rj_passwords)  # RJ号密码（RJ号, RJ号+1, RJ号-1）
         password_list.extend(vault_passwords)  # 密码库密码
         password_list.append("")  # 无密码
         password_list.extend(self.config.extract.password_list)  # 默认密码
@@ -1174,7 +1198,15 @@ class ExtractService:
         for password in unique_passwords:
             file_list = await self._list_archive_contents(archive_path, password)
             if file_list is not None:
-                source = "密码库" if password in vault_passwords else ("默认" if password in self.config.extract.password_list else "无")
+                # 判断密码来源
+                if password in rj_passwords:
+                    source = "RJ号"
+                elif password in vault_passwords:
+                    source = "密码库"
+                elif password in self.config.extract.password_list:
+                    source = "默认"
+                else:
+                    source = "无"
                 logger.info(f"成功读取压缩包内容，使用密码来源: {source} ({password or '无密码'})")
                 # 注意：这里返回的 password 只是能读取内容的密码，不一定能解压
                 # 真正能解压的密码会在 _try_extract 中更新
@@ -1227,9 +1259,13 @@ class ExtractService:
         """尝试解压，返回 (是否成功, 成功使用的密码)"""
         # 再次从密码库查找所有相关密码（以防用户在处理过程中添加了新密码）
         vault_passwords = await self._get_passwords_for_archive(archive_info.path)
-        
-        # 构建密码列表：密码库密码优先，然后是已知密码，最后是默认密码
+
+        # 获取RJ号相关密码
+        rj_passwords = self._get_rj_passwords(archive_info.path)
+
+        # 构建密码列表：RJ号密码优先，然后密码库密码，已知密码，最后是默认密码
         password_list = []
+        password_list.extend(rj_passwords)  # RJ号密码（RJ号, RJ号+1, RJ号-1）
         password_list.extend(vault_passwords)  # 密码库密码
         if archive_info.password and archive_info.password not in password_list:
             password_list.append(archive_info.password)
@@ -1259,7 +1295,17 @@ class ExtractService:
                 cmd.append('-p')  # 空密码
             
             try:
-                password_source = "密码库" if password in vault_passwords else ("已知" if password == archive_info.password else "默认")
+                # 判断密码来源
+                if password in rj_passwords:
+                    password_source = "RJ号"
+                elif password in vault_passwords:
+                    password_source = "密码库"
+                elif password == archive_info.password:
+                    password_source = "已知"
+                elif password == "":
+                    password_source = "无"
+                else:
+                    password_source = "默认"
                 task.update_progress(40, f"尝试解压 (密码来源: {password_source})")
                 result = await self._run_7z_command(cmd)
                 

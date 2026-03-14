@@ -138,6 +138,9 @@ class ConfigResponse(BaseModel):
     path_mapping: Optional[dict] = None
     kikoeru_server: Optional[dict] = None
     asmr_sync: Optional[dict] = None
+    auto_process: Optional[dict] = None
+    process_existing: Optional[dict] = None
+    asmr_sync_step: Optional[dict] = None
 
 # API路由
 @app.post("/api/tasks", response_model=TaskResponse)
@@ -333,7 +336,10 @@ async def get_configuration():
         processed_archive_cleanup=config.processed_archive_cleanup.model_dump(),
         path_mapping=config.path_mapping.model_dump(),
         kikoeru_server=config.kikoeru_server.model_dump() if hasattr(config, 'kikoeru_server') else None,
-        asmr_sync=config.asmr_sync.model_dump() if hasattr(config, 'asmr_sync') else None
+        asmr_sync=config.asmr_sync.model_dump() if hasattr(config, 'asmr_sync') else None,
+        auto_process=config.auto_process.model_dump() if hasattr(config, 'auto_process') else None,
+        process_existing=config.process_existing.model_dump() if hasattr(config, 'process_existing') else None,
+        asmr_sync_step=config.asmr_sync_step.model_dump() if hasattr(config, 'asmr_sync_step') else None
     )
 
 @app.post("/api/config")

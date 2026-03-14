@@ -214,16 +214,20 @@ class TaskEngine:
             await self._notify_progress(task)
             
             if task.type == TaskType.AUTO_PROCESS:
+                from ..config.settings import get_config
+                config = get_config()
+
                 extract_service = ExtractService()
                 filter_service = FilterService()
                 metadata_service = MetadataService()
                 classifier = SmartClassifier()
-                
+
+                # 步骤0: 预检重复
                 logger.debug(f"[{rjcode}] 步骤0: 预检重复")
                 task.update_progress(5, "预检中")
                 rjcode = self._extract_rjcode(task.source_path)
                 logger.debug(f"[{rjcode}] 提取到的RJ号: {rjcode}")
-                if rjcode and task.auto_classify:
+                if config.auto_process.check_duplicate and rjcode and task.auto_classify:
                     is_duplicate = await classifier.check_duplicate_before_extract(rjcode, task, self)
                     logger.debug(f"[{rjcode}] 重复检查结果: {is_duplicate}")
                     if is_duplicate:
@@ -232,54 +236,78 @@ class TaskEngine:
                         task.update_progress(100, "重复作品，请在问题作品页面处理")
                         task.completed_at = datetime.utcnow()
                         return
-                
+
+                # 步骤1: 解压
                 logger.debug(f"[{rjcode}] 步骤1: 解压")
-                task.update_progress(10, "解压中")
-                extracted_path = await extract_service.extract(task)
-                logger.debug(f"[{rjcode}] 解压结果路径: {extracted_path}")
-                if not extracted_path:
-                    logger.error(f"[{rjcode}] 解压失败，任务终止")
-                    return
+                if config.auto_process.extract:
+                    task.update_progress(10, "解压中")
+                    extracted_path = await extract_service.extract(task)
+                    logger.debug(f"[{rjcode}] 解压结果路径: {extracted_path}")
+                    if not extracted_path:
+                        logger.error(f"[{rjcode}] 解压失败，任务终止")
+                        return
+                else:
+                    logger.info(f"[{rjcode}] 步骤[解压]已禁用，跳过")
+                    extracted_path = task.source_path
+                    if os.path.isfile(extracted_path):
+                        logger.error(f"[{rjcode}] 解压已禁用但源路径是文件，任务终止")
+                        return
 
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     logger.info(f"[{rjcode}] 任务已取消")
                     return
 
+                # 步骤2: 获取元数据
                 logger.debug(f"[{rjcode}] 步骤2: 获取元数据")
-                task.update_progress(40, "获取元数据")
-                metadata = await metadata_service.fetch(extracted_path, task)
-                logger.debug(f"[{rjcode}] 元数据: {metadata.get('work_name', '未知')}")
-                task.task_metadata = metadata
+                if config.auto_process.fetch_metadata:
+                    task.update_progress(40, "获取元数据")
+                    metadata = await metadata_service.fetch(extracted_path, task)
+                    logger.debug(f"[{rjcode}] 元数据: {metadata.get('work_name', '未知')}")
+                    task.task_metadata = metadata
+                else:
+                    logger.info(f"[{rjcode}] 步骤[获取元数据]已禁用，跳过")
+                    metadata = {'rjcode': rjcode}
+                    task.task_metadata = metadata
 
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     return
 
+                # 步骤3: 重命名
                 logger.debug(f"[{rjcode}] 步骤3: 重命名")
-                task.update_progress(60, "重命名文件夹")
-                from .rename_service import RenameService
-                rename_service = RenameService()
-                renamed_path = await rename_service.rename(extracted_path, task)
-                logger.debug(f"[{rjcode}] 重命名后路径: {renamed_path}")
+                if config.auto_process.rename:
+                    task.update_progress(60, "重命名文件夹")
+                    from .rename_service import RenameService
+                    rename_service = RenameService()
+                    renamed_path = await rename_service.rename(extracted_path, task)
+                    logger.debug(f"[{rjcode}] 重命名后路径: {renamed_path}")
+                else:
+                    logger.info(f"[{rjcode}] 步骤[重命名]已禁用，跳过")
+                    renamed_path = extracted_path
 
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     return
 
+                # 步骤4: 过滤
                 logger.debug(f"[{rjcode}] 步骤4: 过滤")
-                task.update_progress(75, "过滤文件中")
-                await filter_service.filter(renamed_path, task)
+                if config.auto_process.filter:
+                    task.update_progress(75, "过滤文件中")
+                    await filter_service.filter(renamed_path, task)
+                else:
+                    logger.info(f"[{rjcode}] 步骤[过滤]已禁用，跳过")
 
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     return
 
+                # 步骤5: 扁平化
                 logger.debug(f"[{rjcode}] 步骤5: 扁平化")
-                from ..config.settings import get_config
-                config = get_config()
                 if config.rename.flatten_single_subfolder:
                     task.update_progress(78, "扁平化文件夹结构")
+                    from .rename_service import RenameService
+                    rename_service = RenameService()
                     renamed_path = rename_service._flatten_single_subfolder(renamed_path)
                     logger.debug(f"[{rjcode}] 扁平化后路径: {renamed_path}")
 
@@ -305,58 +333,74 @@ class TaskEngine:
                 if task.is_cancelled():
                     return
 
+                # 步骤6: 智能分类
                 logger.debug(f"[{rjcode}] 步骤6: 智能分类")
-                if task.auto_classify:
+                if config.auto_process.classify and task.auto_classify:
                     task.update_progress(80, "智能分类")
                     final_path = await classifier.classify_and_move(renamed_path, metadata, task)
                     task.output_path = final_path
                     logger.debug(f"[{rjcode}] 分类后路径: {final_path}")
+                else:
+                    if not config.auto_process.classify:
+                        logger.info(f"[{rjcode}] 步骤[智能分类]已禁用，跳过")
+                    task.output_path = renamed_path
 
+                # 步骤7: 归档压缩包
                 logger.debug(f"[{rjcode}] 步骤7: 归档压缩包")
-                task.update_progress(95, "归档压缩包")
-                await self._archive_source_file(task)
+                if config.auto_process.archive and not task.skip_archive:
+                    task.update_progress(95, "归档压缩包")
+                    await self._archive_source_file(task)
+                else:
+                    if task.skip_archive:
+                        logger.info(f"[{rjcode}] 重新处理模式，跳过归档")
+                    else:
+                        logger.info(f"[{rjcode}] 步骤[归档压缩包]已禁用，跳过")
 
                 task.update_progress(100, "完成")
                 task.complete()
                 logger.info(f"[{rjcode}] ========== 任务完成 ==========")
                 
             elif task.type == TaskType.PROCESS_EXISTING_FOLDER:
+                from ..config.settings import get_config
+                config = get_config()
+
                 filter_service = FilterService()
                 metadata_service = MetadataService()
                 classifier = SmartClassifier()
-                
+
                 existing_folder_path = task.source_path
                 logger.debug(f"[{rjcode}] 处理已存在文件夹: {existing_folder_path}")
-                
+
+                # 步骤0: 预检重复
                 logger.debug(f"[{rjcode}] 步骤0: 预检重复")
                 task.update_progress(5, "预检中")
                 rjcode = self._extract_rjcode(existing_folder_path)
                 logger.debug(f"[{rjcode}] 提取到的RJ号: {rjcode}")
-                if rjcode and task.auto_classify:
+                if config.process_existing.check_duplicate and rjcode and task.auto_classify:
                     from .duplicate_service import get_duplicate_service
                     duplicate_service = get_duplicate_service()
-                    
+
                     check_result = await duplicate_service.check_duplicate_enhanced(
                         rjcode,
                         check_linked_works=True,
                         cue_languages=['CHI_HANS', 'CHI_HANT', 'ENG']
                     )
                     logger.debug(f"[{rjcode}] 重复检查结果: is_duplicate={check_result.is_duplicate}")
-                    
+
                     if check_result.is_duplicate:
                         conflict_type = check_result.conflict_type
-                        
+
                         if check_result.direct_duplicate:
                             logger.warning(f"[{rjcode}] 已存在: {check_result.direct_duplicate['path']}")
                         elif check_result.linked_works_found:
                             linked_rjcodes = [w['rjcode'] for w in check_result.linked_works_found]
                             logger.warning(f"[{rjcode}] 关联作品冲突: {linked_rjcodes}")
-                        
+
                         classifier._add_to_conflict_works(
                             task.id,
                             rjcode,
                             conflict_type,
-                            check_result.direct_duplicate['path'] if check_result.direct_duplicate else 
+                            check_result.direct_duplicate['path'] if check_result.direct_duplicate else
                             (check_result.linked_works_found[0]['path'] if check_result.linked_works_found else "未知路径"),
                             existing_folder_path,
                             {},
@@ -364,13 +408,13 @@ class TaskEngine:
                             analysis_info=check_result.analysis_info,
                             related_rjcodes=check_result.related_rjcodes
                         )
-                        
+
                         logger.info(f"[{rjcode}] 已添加到问题作品列表")
                         task.status = TaskStatus.COMPLETED
                         task.update_progress(100, f"发现{get_conflict_type_name(conflict_type)}，请在问题作品页面处理")
                         task.completed_at = datetime.utcnow()
                         return
-                    
+
                     is_processing = await classifier.check_duplicate_before_extract(rjcode, task, self)
                     if is_processing:
                         logger.info(f"[{rjcode}] 正在处理中，已添加到问题作品列表")
@@ -378,49 +422,65 @@ class TaskEngine:
                         task.update_progress(100, "正在处理中，请在问题作品页面查看")
                         task.completed_at = datetime.utcnow()
                         return
-                
+                else:
+                    if not config.process_existing.check_duplicate:
+                        logger.info(f"[{rjcode}] 步骤[预检重复]已禁用，跳过")
+
                 extracted_path = existing_folder_path
-                
+
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     return
-                
+
+                # 步骤1: 获取元数据
                 logger.debug(f"[{rjcode}] 步骤1: 获取元数据")
-                task.update_progress(30, "获取元数据")
-                metadata = await metadata_service.fetch(extracted_path, task)
-                logger.debug(f"[{rjcode}] 元数据: {metadata.get('work_name', '未知')}")
-                task.task_metadata = metadata
-                
+                if config.process_existing.fetch_metadata:
+                    task.update_progress(30, "获取元数据")
+                    metadata = await metadata_service.fetch(extracted_path, task)
+                    logger.debug(f"[{rjcode}] 元数据: {metadata.get('work_name', '未知')}")
+                    task.task_metadata = metadata
+                else:
+                    logger.info(f"[{rjcode}] 步骤[获取元数据]已禁用，跳过")
+                    metadata = {'rjcode': rjcode}
+                    task.task_metadata = metadata
+
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     return
-                
+
+                # 步骤2: 重命名
                 logger.debug(f"[{rjcode}] 步骤2: 重命名")
-                task.update_progress(50, "重命名文件夹")
-                from .rename_service import RenameService
-                rename_service = RenameService()
-                renamed_path = await rename_service.rename(extracted_path, task)
-                logger.debug(f"[{rjcode}] 重命名后路径: {renamed_path}")
+                if config.process_existing.rename:
+                    task.update_progress(50, "重命名文件夹")
+                    from .rename_service import RenameService
+                    rename_service = RenameService()
+                    renamed_path = await rename_service.rename(extracted_path, task)
+                    logger.debug(f"[{rjcode}] 重命名后路径: {renamed_path}")
+                else:
+                    logger.info(f"[{rjcode}] 步骤[重命名]已禁用，跳过")
+                    renamed_path = extracted_path
 
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     return
 
+                # 步骤3: 过滤
                 logger.debug(f"[{rjcode}] 步骤3: 过滤")
-                task.update_progress(70, "过滤文件中")
-                await filter_service.filter(renamed_path, task)
+                if config.process_existing.filter:
+                    task.update_progress(70, "过滤文件中")
+                    await filter_service.filter(renamed_path, task)
+                else:
+                    logger.info(f"[{rjcode}] 步骤[过滤]已禁用，跳过")
 
                 await task.wait_if_paused()
                 if task.is_cancelled():
                     return
-
-                # 获取配置
-                from ..config.settings import get_config
-                config = get_config()
 
                 logger.debug(f"[{rjcode}] 步骤4: 扁平化")
                 if config.rename.flatten_single_subfolder:
                     task.update_progress(75, "扁平化文件夹结构")
+                    from .rename_service import RenameService
+                    rename_service = RenameService()
                     renamed_path = rename_service._flatten_single_subfolder(renamed_path)
                     logger.debug(f"[{rjcode}] 扁平化后路径: {renamed_path}")
 
@@ -428,9 +488,9 @@ class TaskEngine:
                     task.update_progress(78, "清理空文件夹")
                     rename_service.remove_empty_folders(renamed_path, remove_root=False)
 
-                # 步骤4.5: 从 Subtitles 目录导入 LRC 字幕（如果存在）
+                # 步骤4.5: 从 Subtitles 目录导入 LRC 字幕（如果存在且启用）
                 subtitle_folder = None
-                if hasattr(config, 'asmr_sync') and config.asmr_sync.asmr_subtitle_path:
+                if config.process_existing.import_lrc and hasattr(config, 'asmr_sync') and config.asmr_sync.asmr_subtitle_path:
                     subtitle_base = config.asmr_sync.asmr_subtitle_path
                     if os.path.exists(subtitle_base) and rjcode:
                         # 查找匹配 RJ 号的字幕文件夹
@@ -474,6 +534,9 @@ class TaskEngine:
                                            f"复制 {len(sync_result['copied_subtitles'])} 个字幕")
                             else:
                                 logger.warning(f"[{rjcode}] 字幕同步失败: {sync_result.get('errors', [])}")
+                else:
+                    if not config.process_existing.import_lrc:
+                        logger.info(f"[{rjcode}] 步骤[LRC导入]已禁用，跳过")
 
                 await task.wait_if_paused()
                 if task.is_cancelled():
@@ -493,13 +556,18 @@ class TaskEngine:
                 if task.is_cancelled():
                     return
 
+                # 步骤5: 智能分类
                 logger.debug(f"[{rjcode}] 步骤5: 智能分类")
-                if task.auto_classify:
+                if config.process_existing.classify and task.auto_classify:
                     task.update_progress(80, "智能分类")
                     final_path = await classifier.classify_and_move(renamed_path, metadata, task)
                     task.output_path = final_path
                     logger.debug(f"[{rjcode}] 分类后路径: {final_path}")
-                
+                else:
+                    if not config.process_existing.classify:
+                        logger.info(f"[{rjcode}] 步骤[智能分类]已禁用，跳过")
+                    task.output_path = renamed_path
+
                 task.update_progress(100, "完成")
                 task.complete()
                 logger.info(f"[{rjcode}] ========== 任务完成 ==========")
@@ -1336,7 +1404,7 @@ class TaskEngine:
 
             # 步骤3: 清理LRC广告（如果启用）
             lrc_clean_result = None
-            if hasattr(config, 'asmr_sync') and config.asmr_sync.lrc_clean_enabled:
+            if config.asmr_sync.lrc_clean_enabled:
                 task.update_progress(70, "清理LRC广告")
                 custom_patterns = config.asmr_sync.lrc_clean_patterns if hasattr(config.asmr_sync, 'lrc_clean_patterns') else None
                 lrc_clean_result = subtitle_service.clean_lrc_files_in_folder(subtitle_folder, custom_patterns)
@@ -1348,7 +1416,7 @@ class TaskEngine:
 
             # 步骤3.5: 字幕文件繁体转简体（如果启用）
             simplify_result = None
-            if hasattr(config, 'asmr_sync') and getattr(config.asmr_sync, 'simplify_chinese_enabled', False):
+            if getattr(config.asmr_sync, 'simplify_chinese_enabled', False):
                 task.update_progress(72, "字幕繁体转简体")
                 simplify_result = subtitle_service.convert_subtitles_to_simplified_in_folder(subtitle_folder)
                 if simplify_result['converted_files'] > 0:
@@ -1357,77 +1425,90 @@ class TaskEngine:
                 task.task_metadata['simplify_result'] = simplify_result
 
             # 步骤4: 同步字幕文件
-            task.update_progress(75, "同步字幕文件")
-            sync_result = subtitle_service.sync_subtitles_to_download(
-                download_dir=download_dir,
-                subtitle_folder=subtitle_folder
-            )
+            if config.asmr_sync_step.sync_subtitle:
+                task.update_progress(75, "同步字幕文件")
+                sync_result = subtitle_service.sync_subtitles_to_download(
+                    download_dir=download_dir,
+                    subtitle_folder=subtitle_folder
+                )
 
-            # 保存字幕同步结果到任务元数据
-            task.task_metadata['sync_result'] = {
-                'success': sync_result['success'],
-                'renamed_files': sync_result.get('renamed_files', []),
-                'copied_subtitles': sync_result.get('copied_subtitles', []),
-                'errors': sync_result.get('errors', [])
-            }
+                # 保存字幕同步结果到任务元数据
+                task.task_metadata['sync_result'] = {
+                    'success': sync_result['success'],
+                    'renamed_files': sync_result.get('renamed_files', []),
+                    'copied_subtitles': sync_result.get('copied_subtitles', []),
+                    'errors': sync_result.get('errors', [])
+                }
 
-            if not sync_result['success']:
-                logger.warning(f"[{rjcode}] 字幕同步部分失败: {sync_result.get('errors', [])}")
+                if not sync_result['success']:
+                    logger.warning(f"[{rjcode}] 字幕同步部分失败: {sync_result.get('errors', [])}")
+                else:
+                    logger.info(f"[{rjcode}] 字幕同步成功: 重命名 {len(sync_result.get('renamed_files', []))} 个文件")
             else:
-                logger.info(f"[{rjcode}] 字幕同步成功: 重命名 {len(sync_result.get('renamed_files', []))} 个文件")
+                logger.info(f"[{rjcode}] 步骤[同步字幕]已禁用，跳过")
 
             await task.wait_if_paused()
             if task.is_cancelled():
                 return
 
             # 步骤4: 重命名文件夹
-            task.update_progress(85, "重命名文件夹")
+            if config.asmr_sync_step.rename:
+                task.update_progress(85, "重命名文件夹")
 
-            # 检测标题是否包含日文字符
-            def contains_japanese(text):
-                """检测文本是否包含日文字符（平假名、片假名、日文汉字）"""
-                for char in text:
-                    if '\u3040' <= char <= '\u309F':  # 平假名
+                # 检测标题是否包含日文字符
+                def contains_japanese(text):
+                    """检测文本是否包含日文字符（平假名、片假名、日文汉字）"""
+                    for char in text:
+                        if '\u3040' <= char <= '\u309F':  # 平假名
+                            return True
+                        if '\u30A0' <= char <= '\u30FF':  # 片假名
+                            return True
+                        if '\u4E00' <= char <= '\u9FAF':  # 日文汉字（CJK统一表意文字）
+                            # 进一步检查是否是常见日文用字
+                            pass
+                    # 检查是否包含平假名或片假名
+                    import re
+                    if re.search(r'[\u3040-\u309F\u30A0-\u30FF]', text):
                         return True
-                    if '\u30A0' <= char <= '\u30FF':  # 片假名
-                        return True
-                    if '\u4E00' <= char <= '\u9FAF':  # 日文汉字（CJK统一表意文字）
-                        # 进一步检查是否是常见日文用字
-                        pass
-                # 检查是否包含平假名或片假名
-                import re
-                if re.search(r'[\u3040-\u309F\u30A0-\u30FF]', text):
-                    return True
-                return False
+                    return False
 
-            # 如果下载的标题包含日文，尝试从字幕文件夹名称获取中文标题
-            final_work_title = work_title
-            if contains_japanese(work_title):
-                # 从字幕文件夹路径提取名称
-                subtitle_folder_name = os.path.basename(subtitle_folder)
-                logger.info(f"[{rjcode}] 检测到日文标题，尝试从字幕文件夹获取中文名称: {subtitle_folder_name}")
+                # 如果下载的标题包含日文，尝试从字幕文件夹名称获取中文标题
+                final_work_title = work_title
+                if contains_japanese(work_title):
+                    # 从字幕文件夹路径提取名称
+                    subtitle_folder_name = os.path.basename(subtitle_folder)
+                    logger.info(f"[{rjcode}] 检测到日文标题，尝试从字幕文件夹获取中文名称: {subtitle_folder_name}")
 
-                # 尝试从字幕文件夹名称提取标题（格式通常是: RJxxxxxxxx 标题）
-                import re
-                match = re.match(r'(RJ\d+)\s*(.+)', subtitle_folder_name, re.IGNORECASE)
-                if match:
-                    extracted_title = match.group(2).strip()
-                    if extracted_title and not contains_japanese(extracted_title):
-                        final_work_title = extracted_title
-                        logger.info(f"[{rjcode}] 使用字幕文件夹标题: {final_work_title}")
-                    else:
-                        logger.info(f"[{rjcode}] 字幕文件夹标题也包含日文，保留原标题")
+                    # 尝试从字幕文件夹名称提取标题（格式通常是: RJxxxxxxxx 标题）
+                    import re
+                    match = re.match(r'(RJ\d+)\s*(.+)', subtitle_folder_name, re.IGNORECASE)
+                    if match:
+                        extracted_title = match.group(2).strip()
+                        if extracted_title and not contains_japanese(extracted_title):
+                            final_work_title = extracted_title
+                            logger.info(f"[{rjcode}] 使用字幕文件夹标题: {final_work_title}")
+                        else:
+                            logger.info(f"[{rjcode}] 字幕文件夹标题也包含日文，保留原标题")
 
-            # 构建元数据用于重命名
-            metadata = {
-                'rjcode': actual_rjcode,  # 使用实际下载的RJ号
-                'work_name': final_work_title,
-                'work_title': final_work_title,
-            }
-            task.task_metadata.update(metadata)
+                # 构建元数据用于重命名
+                metadata = {
+                    'rjcode': actual_rjcode,  # 使用实际下载的RJ号
+                    'work_name': final_work_title,
+                    'work_title': final_work_title,
+                }
+                task.task_metadata.update(metadata)
 
-            renamed_path = await rename_service.rename(download_dir, task)
-            logger.info(f"[{rjcode}] 重命名后路径: {renamed_path}")
+                renamed_path = await rename_service.rename(download_dir, task)
+                logger.info(f"[{rjcode}] 重命名后路径: {renamed_path}")
+            else:
+                logger.info(f"[{rjcode}] 步骤[重命名]已禁用，跳过")
+                renamed_path = download_dir
+                metadata = {
+                    'rjcode': actual_rjcode,
+                    'work_name': work_title,
+                    'work_title': work_title,
+                }
+                task.task_metadata.update(metadata)
 
             # 步骤4.5: 扁平化文件夹
             if config.rename.flatten_single_subfolder:
@@ -1440,12 +1521,14 @@ class TaskEngine:
                 return
 
             # 步骤5: 智能分类
-            if task.auto_classify:
+            if config.asmr_sync_step.classify and task.auto_classify:
                 task.update_progress(90, "智能分类")
                 final_path = await classifier.classify_and_move(renamed_path, metadata, task)
                 task.output_path = final_path
                 logger.info(f"[{rjcode}] 分类后路径: {final_path}")
             else:
+                if not config.asmr_sync_step.classify:
+                    logger.info(f"[{rjcode}] 步骤[智能分类]已禁用，跳过")
                 # 移动到 library_path
                 task.update_progress(90, "移动到媒体库")
                 library_path = config.storage.library_path
@@ -1462,30 +1545,33 @@ class TaskEngine:
                 logger.info(f"[{rjcode}] 移动到: {final_path}")
 
             # 步骤6: 移动字幕文件夹到Finished目录
-            task.update_progress(95, "整理字幕文件夹")
-            try:
-                subtitle_parent = os.path.dirname(subtitle_folder)
-                finished_dir = os.path.join(subtitle_parent, "Finished")
+            if config.asmr_sync_step.move_subtitle_folder:
+                task.update_progress(95, "整理字幕文件夹")
+                try:
+                    subtitle_parent = os.path.dirname(subtitle_folder)
+                    finished_dir = os.path.join(subtitle_parent, "Finished")
 
-                # 创建Finished目录
-                os.makedirs(finished_dir, exist_ok=True)
+                    # 创建Finished目录
+                    os.makedirs(finished_dir, exist_ok=True)
 
-                # 移动字幕文件夹
-                subtitle_folder_name = os.path.basename(subtitle_folder)
-                dest_subtitle_path = os.path.join(finished_dir, subtitle_folder_name)
+                    # 移动字幕文件夹
+                    subtitle_folder_name = os.path.basename(subtitle_folder)
+                    dest_subtitle_path = os.path.join(finished_dir, subtitle_folder_name)
 
-                # 处理重名
-                counter = 1
-                while os.path.exists(dest_subtitle_path):
-                    dest_subtitle_path = os.path.join(finished_dir, f"{subtitle_folder_name}_{counter}")
-                    counter += 1
+                    # 处理重名
+                    counter = 1
+                    while os.path.exists(dest_subtitle_path):
+                        dest_subtitle_path = os.path.join(finished_dir, f"{subtitle_folder_name}_{counter}")
+                        counter += 1
 
-                shutil.move(subtitle_folder, dest_subtitle_path)
-                logger.info(f"[{rjcode}] 字幕文件夹已移动到: {dest_subtitle_path}")
-                task.task_metadata['subtitle_moved_to'] = dest_subtitle_path
+                    shutil.move(subtitle_folder, dest_subtitle_path)
+                    logger.info(f"[{rjcode}] 字幕文件夹已移动到: {dest_subtitle_path}")
+                    task.task_metadata['subtitle_moved_to'] = dest_subtitle_path
 
-            except Exception as move_error:
-                logger.warning(f"[{rjcode}] 移动字幕文件夹失败: {move_error}")
+                except Exception as move_error:
+                    logger.warning(f"[{rjcode}] 移动字幕文件夹失败: {move_error}")
+            else:
+                logger.info(f"[{rjcode}] 步骤[移动字幕文件夹]已禁用，跳过")
 
             task.update_progress(100, "完成")
             task.complete()
