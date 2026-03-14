@@ -353,7 +353,7 @@ export const kikoeruApi = {
     return response.data
   },
 
-  check: async (rjcode, checkLinkages = true, cueLanguages = 'CHI_HANS CHI_HANT ENG') => {
+  check: async (rjcode, checkLinkages = true, cueLanguages = 'CHI_HANS CHI_HANT ENG JPN') => {
     const response = await apiClient.post('/kikoeru-server/check', null, {
       params: { rjcode, check_linkages: checkLinkages, cue_languages: cueLanguages }
     })
