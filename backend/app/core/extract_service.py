@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 import asyncio
+import sys
 import filetype
 from typing import Optional, List, Dict
 from pathlib import Path
@@ -12,6 +13,12 @@ from ..config.settings import get_config
 from ..core.task_engine import Task
 
 logger = logging.getLogger(__name__)
+
+# Windows 上隐藏子进程窗口的标志
+if sys.platform == 'win32':
+    CREATE_NO_WINDOW = 0x08000000
+else:
+    CREATE_NO_WINDOW = 0
 
 class ArchiveInfo:
     """压缩包信息"""
@@ -1402,13 +1409,20 @@ class ExtractService:
         """运行7z命令"""
         # 记录命令（显示密码用于调试）
         logger.info(f"执行7z命令: {' '.join(cmd)}")
-        
+
         try:
-            # 使用 asyncio.create_subprocess_exec 直接执行（与原来代码一致）
+            # Windows 上隐藏子进程窗口，避免闪烁
+            kwargs = {
+                'stdout': subprocess.PIPE,
+                'stderr': subprocess.PIPE
+            }
+            if sys.platform == 'win32':
+                kwargs['creationflags'] = CREATE_NO_WINDOW
+
+            # 使用 asyncio.create_subprocess_exec 直接执行
             process = await asyncio.create_subprocess_exec(
                 *cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                **kwargs
             )
             
             stdout, stderr = await process.communicate()
