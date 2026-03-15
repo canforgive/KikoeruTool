@@ -6,13 +6,11 @@
 
 ## 功能亮点
 
-- **智能解压**: 自动识别压缩格式、修复后缀名、支持密码爆破、分卷合并
-- **元数据获取**: 自动从 DLsite 获取作品信息，支持关联作品查询
+- **智能解压**: 自动识别压缩格式、修复后缀名、支持密码爆破、分卷合并、自动检测日区编码
+- **元数据获取**: 自动从 DLsite 获取作品信息，支持关联作品查询、日语元数据选项
 - **智能分类**: 按社团、系列等规则自动分类到存储库
 - **ASMR 同步下载**: 扫描字幕文件夹，自动下载对应资源
-- **字幕处理**: LRC 广告清理、繁简转换
 - **重复检测**: 检测重复作品和多语言版本
-- **文件夹监视**: 自动监视文件夹，新文件自动处理
 - **Web UI**: 现代化的 Web 界面，支持实时进度查看
 
 ## 快速开始
@@ -26,11 +24,8 @@
 ### Docker 部署
 
 ```bash
-# 拉取镜像
 docker pull ghcr.io/canforgive/kikoerutool:latest
 ```
-
-**docker-compose.yml 示例：**
 
 ```yaml
 version: '3'
@@ -41,43 +36,28 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - PUID=1000  # 通过 'id' 命令查到的 uid
-      - PGID=1000  # 通过 'id' 命令查到的 gid
-      - CONFIG_PATH=/app/config
-      - TZ=Asia/Shanghai  # 建议设置时区，防止日志时间错乱
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Shanghai
     volumes:
-      - /path/to/config:/app/config    # 配置文件目录
-      - /path/to/data:/app/data        # 数据库目录
-      - /path/to/input:/input          # 待处理压缩包目录
-      - /path/to/library:/library      # 音声库存目录
-      - /path/to/temp:/temp            # 临时解压目录
-      - /path/to/processed:/processed  # 已处理压缩包目录
-      - /path/to/existing:/existing    # 已有作品目录
-      - /path/to/subtitles:/Subtitles  # ASMR同步字幕目录
+      - ./config:/app/config
+      - ./data:/app/data
+      - /path/to/input:/input
+      - /path/to/library:/library
+      - /path/to/temp:/temp
     restart: unless-stopped
 ```
 
-启动后访问 http://localhost:8000
-
-### 本地开发
-
-```bash
-# 后端
-cd backend && pip install -r requirements.txt
-python -m app.main
-
-# 前端（新终端）
-cd frontend && npm install
-npm run dev
-```
+详细部署说明请查看 [Docker 部署指南](docs/DOCKER.md)。
 
 ## 文档
 
-- **[免责声明与使用条款](DISCLAIMER.md)** - 使用软件默认同意
-- [软件介绍](docs/INTRODUCTION.md) - 详细功能说明和使用指南
-- [本地开发指南](docs/LOCAL_DEV.md) - 开发环境配置
-- [构建指南](docs/BUILD.md) - 打包和发布
-- [API 文档](http://localhost:8000/docs) - 服务启动后访问
+| 文档 | 说明 |
+|------|------|
+| [免责声明](DISCLAIMER.md) | 使用软件前请务必阅读 |
+| [功能介绍](docs/INTRODUCTION.md) | 详细功能说明和使用指南 |
+| [Docker 部署](docs/DOCKER.md) | Docker 和 Unraid 部署指南 |
+| [开发指南](docs/DEVELOPMENT.md) | 本地开发、构建、测试 |
 
 ## 项目结构
 
@@ -105,8 +85,8 @@ MIT License
 
 ## 致谢
 
-本项目参考和借鉴了以下开源项目，感谢各位作者对社区的贡献：
+本项目参考和借鉴了以下开源项目：
 
-- [Sakyoriii/prekikoeru](https://github.com/Sakyoriii/prekikoeru) - DLsite 资源自动解压整理工具
-- [yodhcn/dlsite-doujin-renamer](https://github.com/yodhcn/dlsite-doujin-renamer) - DLsite 同人作品重命名工具
-- [Number178/kikoeru-quasar](https://github.com/Number178/kikoeru-quasar) - Kikoeru 前端项目
+- [Sakyoriii/prekikoeru](https://github.com/Sakyoriii/prekikoeru)
+- [yodhcn/dlsite-doujin-renamer](https://github.com/yodhcn/dlsite-doujin-renamer)
+- [Number178/kikoeru-quasar](https://github.com/Number178/kikoeru-quasar)
