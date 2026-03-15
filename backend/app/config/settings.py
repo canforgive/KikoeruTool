@@ -89,6 +89,7 @@ class RenameConfig(BaseModel):
     flatten_depth: int = 3  # 扁平化深度，最多处理多少层嵌套的单子文件夹（默认3层）
     remove_empty_folders: bool = True  # 过滤后是否移除空文件夹
     api_rename_follow_template: bool = False  # API重命名是否遵循重命名模板
+    use_japanese_metadata: bool = False  # 使用日语元数据填充模板（除rjcode和work_name外）
 
 class PasswordCleanupConfig(BaseModel):
     """密码库智能清理配置"""
@@ -313,6 +314,10 @@ def load_config(config_path: str = None) -> AppConfig:
                 if 'api_rename_follow_template' not in config_data['rename']:
                     config_data['rename']['api_rename_follow_template'] = False
                     logger.info("添加缺失的 api_rename_follow_template 配置，默认为 False")
+                # 如果 use_japanese_metadata 未设置，默认为 False
+                if 'use_japanese_metadata' not in config_data['rename']:
+                    config_data['rename']['use_japanese_metadata'] = False
+                    logger.info("添加缺失的 use_japanese_metadata 配置，默认为 False")
                 # 记录模板值用于调试
                 logger.info(f"[CONFIG] rename.template = '{config_data['rename'].get('template', 'NOT SET')}'")
 

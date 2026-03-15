@@ -388,6 +388,13 @@
             开启后，库存管理中的"API重命名"将使用上方的重命名模板；关闭则使用简单格式"RJ号 作品名"
           </div>
         </el-form-item>
+
+        <el-form-item label="使用日语元数据">
+          <el-switch v-model="config.rename.use_japanese_metadata" />
+          <div class="form-tip">
+            开启后，重命名模板中的 {maker_name}、{cvs}、{tags} 等字段将使用日语版本的元数据，而 {rjcode} 和 {work_name} 仍使用当前语言的元数据。适用于非日语版本元数据不准确的情况
+          </div>
+        </el-form-item>
       </el-card>
       
       <!-- 密码库智能清理 -->
@@ -1540,7 +1547,9 @@ const defaultConfig = {
     illegal_char_to_full_width: false,
     flatten_single_subfolder: true,
     flatten_depth: 3,
-    remove_empty_folders: true
+    remove_empty_folders: true,
+    api_rename_follow_template: false,
+    use_japanese_metadata: false
   },
   classification: [
     { type: 'none', enabled: true, path_template: '', custom_name: '', fallback: null, max_tags: null, rjcode_range: null }
@@ -1696,7 +1705,9 @@ async function loadConfig() {
           illegal_char_to_full_width: false,
           flatten_single_subfolder: true,
           flatten_depth: 3,
-          remove_empty_folders: true
+          remove_empty_folders: true,
+          api_rename_follow_template: false,
+          use_japanese_metadata: false
         }
       }
       // 确保 flatten_single_subfolder 字段存在
@@ -1710,6 +1721,14 @@ async function loadConfig() {
       // 确保 remove_empty_folders 字段存在
       if (mergedConfig.rename.remove_empty_folders === undefined) {
         mergedConfig.rename.remove_empty_folders = true
+      }
+      // 确保 api_rename_follow_template 字段存在
+      if (mergedConfig.rename.api_rename_follow_template === undefined) {
+        mergedConfig.rename.api_rename_follow_template = false
+      }
+      // 确保 use_japanese_metadata 字段存在
+      if (mergedConfig.rename.use_japanese_metadata === undefined) {
+        mergedConfig.rename.use_japanese_metadata = false
       }
 
       // 确保 extract 配置完整

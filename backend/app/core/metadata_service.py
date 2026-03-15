@@ -348,7 +348,7 @@ class MetadataService:
     
     def _contains_japanese_kana(self, text: str) -> bool:
         """检查文本是否包含日文假名（平假名或片假名）
-        
+
         日文标题通常包含假名，而中文翻译标题通常不包含
         返回True表示可能是日文标题，False表示可能是中文标题
         """
@@ -357,13 +357,72 @@ class MetadataService:
         # 片假名范围: \u30A0-\u30FF
         # 日文标点符号: \u3000-\u303F (包含全角标点)
         kana_pattern = r'[\u3040-\u309F\u30A0-\u30FF]'
-        
+
         kana_count = len(re.findall(kana_pattern, text))
         total_chars = len(text.replace(' ', ''))  # 排除空格
-        
+
         if total_chars == 0:
             return False
-        
+
         # 如果假名占比超过5%，认为是日文标题
         kana_ratio = kana_count / total_chars
         return kana_ratio > 0.05
+
+    async def fetch_japanese_metadata(self, rjcode: str) -> Optional[dict]:
+        """
+        获取日语版本的元数据
+        用于重命名模板中非标题字段的日语原文
+
+        Args:
+            rjcode: RJ号
+
+        Returns:
+            日语元数据字典，包含 maker_name, cvs, tags 等字段
+        """
+        await asyncio.sleep(self.config.metadata.sleep_interval)
+
+        # 使用日语 locale 获取原始数据
+        url = f"https://www.dlsite.com/maniax/api/=/product.json?workno={rjcode}&locale=ja-JP"
+        logger.info(f"[{rjcode}] 获取日语元数据: {url}")
+
+        try:
+            response = self.session.get(
+                url,
+                timeout=(self.config.metadata.connect_timeout, self.config.metadata.read_timeout)
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            if not data or len(data) == 0:
+                logger.warning(f"[{rjcode}] 日语元数据未找到")
+                return None
+
+            product = data[0]
+            japanese_metadata = {
+                'rjcode': product.get('workno', rjcode),
+                'work_name': product.get('work_name', ''),
+                'maker_id': product.get('maker_id', ''),
+                'maker_name': product.get('maker_name', ''),
+                'release_date': product.get('regist_date', '')[:10],
+                'series_name': product.get('series_name'),
+                'series_id': product.get('series_id'),
+                'tags': [],
+                'cvs': [],
+            }
+
+            # 标签
+            for genre in product.get('genres', []):
+                japanese_metadata['tags'].append(genre.get('name', ''))
+
+            # 声优
+            creators = product.get('creaters', {})
+            if isinstance(creators, dict) and 'voice_by' in creators:
+                for cv in creators['voice_by']:
+                    japanese_metadata['cvs'].append(cv.get('name', ''))
+
+            logger.info(f"[{rjcode}] 日语元数据获取成功: maker_name={japanese_metadata['maker_name']}, tags={len(japanese_metadata['tags'])}, cvs={len(japanese_metadata['cvs'])}")
+            return japanese_metadata
+
+        except Exception as e:
+            logger.error(f"[{rjcode}] 获取日语元数据失败: {e}")
+            return None

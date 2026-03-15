@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 
 class RenameService:
     """重命名服务"""
-    
+
     def __init__(self):
         self.config = get_config()
-    
+        self._japanese_metadata_cache = {}  # 缓存日语元数据，避免重复请求
+
     async def rename(self, path: str, task: Task):
         """
         重命名文件夹
@@ -30,11 +31,17 @@ class RenameService:
 
         if not metadata.get('rjcode'):
             raise Exception(f"元数据中缺少RJ号，无法重命名。可用字段: {list(metadata.keys())}")
-        
+
         task.update_progress(60, "重命名文件夹")
 
+        # 如果启用了日语元数据，获取日语版本
+        japanese_metadata = None
+        if self.config.rename.use_japanese_metadata:
+            task.update_progress(61, "获取日语元数据")
+            japanese_metadata = await self._get_japanese_metadata(metadata.get('rjcode'))
+
         # 生成新名称
-        new_name = self._compile_name(metadata)
+        new_name = self._compile_name(metadata, japanese_metadata)
         logger.info(f"重命名服务 - 生成的新名称: {new_name}")
         
         # 清理非法字符
@@ -61,9 +68,34 @@ class RenameService:
         # 执行重命名
         shutil.move(str(dir_path), str(new_path))
         logger.info(f"重命名: {dir_path} -> {new_path}")
-        
+
         return str(new_path)
-    
+
+    async def _get_japanese_metadata(self, rjcode: str) -> Optional[dict]:
+        """
+        获取日语元数据（带缓存）
+
+        Args:
+            rjcode: RJ号
+
+        Returns:
+            日语元数据字典
+        """
+        # 检查缓存
+        if rjcode in self._japanese_metadata_cache:
+            return self._japanese_metadata_cache[rjcode]
+
+        # 从 MetadataService 获取
+        from .metadata_service import MetadataService
+        metadata_service = MetadataService()
+
+        japanese_metadata = await metadata_service.fetch_japanese_metadata(rjcode)
+
+        # 缓存结果
+        self._japanese_metadata_cache[rjcode] = japanese_metadata
+
+        return japanese_metadata
+
     def _flatten_single_subfolder(self, path: str) -> str:
         """
         扁平化单一层级文件夹
@@ -175,32 +207,53 @@ class RenameService:
         except Exception as e:
             logger.warning(f"检查空文件夹失败 {path}: {e}")
     
-    def _compile_name(self, metadata: dict) -> str:
-        """根据模板编译名称"""
+    def _compile_name(self, metadata: dict, japanese_metadata: Optional[dict] = None) -> str:
+        """根据模板编译名称
+
+        Args:
+            metadata: 当前语言的元数据
+            japanese_metadata: 日语元数据（可选），当启用 use_japanese_metadata 时使用
+        """
         template = self.config.rename.template
         logger.info(f"[RENAME] 原始模板: '{template}' (长度: {len(template)})")
-        
+
+        # 确定用于填充模板的数据源
+        # rjcode 和 work_name 始终使用当前语言的元数据
+        # 其他字段在启用日语元数据时使用日语版本
+        use_japanese = self.config.rename.use_japanese_metadata and japanese_metadata
+
         # 替换变量
         name = template
+
+        # rjcode 和 work_name 始终使用当前语言版本
         rjcode = metadata.get('rjcode', '')
         work_name = metadata.get('work_name', '')
-        maker_id = metadata.get('maker_id', '')
-        maker_name = metadata.get('maker_name', '')
-        
-        logger.info(f"[RENAME] 替换前 - rjcode='{rjcode}', work_name='{work_name[:30]}...'")
-        
+
+        logger.info(f"[RENAME] 替换前 - rjcode='{rjcode}', work_name='{work_name[:30] if len(work_name) > 30 else work_name}'")
+
         name = name.replace('{rjcode}', rjcode)
         logger.info(f"[RENAME] 替换rjcode后: '{name}'")
-        
+
         name = name.replace('{work_name}', work_name)
         logger.info(f"[RENAME] 替换work_name后: '{name}'")
-        
+
+        # maker_id 和 maker_name：日语元数据优先
+        if use_japanese:
+            maker_id = japanese_metadata.get('maker_id', metadata.get('maker_id', ''))
+            maker_name = japanese_metadata.get('maker_name', metadata.get('maker_name', ''))
+            logger.info(f"[RENAME] 使用日语元数据 - maker_name='{maker_name}'")
+        else:
+            maker_id = metadata.get('maker_id', '')
+            maker_name = metadata.get('maker_name', '')
+
         name = name.replace('{maker_id}', maker_id)
         name = name.replace('{maker_name}', maker_name)
-        
-        # 日期
+
+        # 日期：日语元数据优先
         if '{release_date}' in name:
-            date_str = metadata.get('release_date', '')
+            date_str = japanese_metadata.get('release_date', '') if use_japanese else metadata.get('release_date', '')
+            if not date_str:
+                date_str = metadata.get('release_date', '')
             if date_str:
                 try:
                     date_obj = datetime.strptime(date_str, '%Y-%m-%d')
@@ -209,20 +262,30 @@ class RenameService:
                     name = name.replace('{release_date}', '')
             else:
                 name = name.replace('{release_date}', '')
-        
-        # CV列表
+
+        # CV列表：日语元数据优先
         if '{cvs}' in name:
-            cvs = metadata.get('cvs', [])
+            if use_japanese and japanese_metadata.get('cvs'):
+                cvs = japanese_metadata.get('cvs', [])
+                logger.info(f"[RENAME] 使用日语CV列表: {cvs[:3]}{'...' if len(cvs) > 3 else ''}")
+            else:
+                cvs = metadata.get('cvs', [])
+
             if cvs:
                 cv_str = self.config.rename.delimiter.join(cvs)
                 cv_str = f"{self.config.rename.cv_list_left}{cv_str}{self.config.rename.cv_list_right}"
                 name = name.replace('{cvs}', cv_str)
             else:
                 name = name.replace('{cvs}', '')
-        
-        # 标签列表
+
+        # 标签列表：日语元数据优先
         if '{tags}' in name:
-            tags = metadata.get('tags', [])
+            if use_japanese and japanese_metadata.get('tags'):
+                tags = japanese_metadata.get('tags', [])
+                logger.info(f"[RENAME] 使用日语标签列表: {tags[:3]}{'...' if len(tags) > 3 else ''}")
+            else:
+                tags = metadata.get('tags', [])
+
             if tags:
                 # 限制标签数量
                 tags = tags[:self.config.rename.tags_max_number]
@@ -230,11 +293,11 @@ class RenameService:
                 name = name.replace('{tags}', tag_str)
             else:
                 name = name.replace('{tags}', '')
-        
+
         # 移除work_name中的方括号内容
         if self.config.rename.exclude_square_brackets:
             name = re.sub(r'【.*?】', '', name)
-        
+
         return name.strip()
     
     def _sanitize_filename(self, filename: str) -> str:
