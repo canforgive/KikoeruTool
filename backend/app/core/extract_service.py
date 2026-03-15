@@ -1222,26 +1222,102 @@ class ExtractService:
         return None
     
     async def _list_archive_contents(self, archive_path: str, password: str = "") -> Optional[List[Dict]]:
-        """列出压缩包内容"""
+        """列出压缩包内容，自动检测最佳编码"""
         cmd = [self.seven_zip, 'l', '-ba', archive_path]
         if password:
             # Windows下使用 -p密码 格式（无空格），与7z官方用法一致
             cmd.append(f'-p{password}')
         else:
             cmd.append('-p')  # 空密码
-        
+
         try:
             logger.debug(f"[7z] 执行命令: {' '.join(cmd)}")
             result = await self._run_7z_command(cmd)
             if result.returncode != 0:
                 logger.warning(f"[7z] 列出压缩包内容失败，返回码: {result.returncode}, 错误: {result.stderr.decode('utf-8', errors='ignore')[:500]}")
                 return None
-            
-            # 使用gbk解码，与原来代码一致
-            return self._parse_7z_list_output(result.stdout.decode('gbk', errors='ignore'))
+
+            # 自动检测最佳编码
+            raw_bytes = result.stdout
+            best_encoding = self._detect_best_encoding(raw_bytes)
+            logger.info(f"[7z] 自动检测编码: {best_encoding}")
+            return self._parse_7z_list_output(raw_bytes.decode(best_encoding, errors='ignore'))
         except Exception as e:
             logger.error(f"列出压缩包内容失败: {e}")
             return None
+
+    def _detect_best_encoding(self, raw_bytes: bytes) -> str:
+        """
+        自动检测压缩包文件名的最佳编码
+        依次尝试: gbk -> shift_jis -> utf-8 -> big5 -> euc_kr
+        """
+        # 编码优先级列表（中文用户优先 GBK，日文次之）
+        encodings = ['gbk', 'shift_jis', 'utf-8', 'big5', 'euc_kr']
+
+        best_encoding = 'gbk'  # 默认
+        best_score = -1
+
+        for encoding in encodings:
+            try:
+                decoded = raw_bytes.decode(encoding, errors='replace')
+                score = self._score_decoded_text(decoded)
+                logger.debug(f"[编码检测] {encoding}: 得分 {score}")
+
+                if score > best_score:
+                    best_score = score
+                    best_encoding = encoding
+            except Exception as e:
+                logger.debug(f"[编码检测] {encoding} 解码失败: {e}")
+                continue
+
+        return best_encoding
+
+    def _score_decoded_text(self, text: str) -> int:
+        """
+        评估解码后文本的质量分数
+        分数越高表示编码越可能是正确的
+        """
+        if not text:
+            return 0
+
+        score = 0
+
+        # 1. 惩罚替换字符（乱码标志）
+        replacement_count = text.count('\ufffd')
+        score -= replacement_count * 10
+
+        # 2. 惩罚控制字符（除换行、制表符外）
+        control_chars = sum(1 for c in text if ord(c) < 32 and c not in '\n\r\t')
+        score -= control_chars * 5
+
+        # 3. 奖励常见字符（日文假名、中文、字母数字）
+        for c in text:
+            # 日文平假名、片假名
+            if '\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff':
+                score += 2
+            # 中日韩统一表意文字
+            elif '\u4e00' <= c <= '\u9fff':
+                score += 1
+            # 字母数字
+            elif c.isalnum() or c in '._-+/\\':
+                score += 1
+            # 常见符号
+            elif c in '（）()[]【】「」『』・·':
+                score += 1
+            # 空格
+            elif c == ' ':
+                score += 0.5
+
+        # 4. 检测常见乱码模式（GBK解码Shift_JIS时出现的特征）
+        # 例如：日文假名被错误解码成生僻汉字
+        garbled_patterns = [
+            r'[\u9e\u9f][\u00-\x7f]',  # 部分乱码特征
+        ]
+        for pattern in garbled_patterns:
+            if re.search(pattern, text):
+                score -= 20
+
+        return int(score)
     
     def _parse_7z_list_output(self, output: str) -> List[Dict]:
         """解析7z列表输出"""
